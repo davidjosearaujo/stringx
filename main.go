@@ -208,10 +208,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "gostrings [flags] [FILE...]",
+	Use:   "stringx [flags] [FILE...]",
 	Short: "Finds printable strings in a file, with advanced filtering.",
-	Long: `A Go implementation of a strings utility, similar to the provided Python script.
-It reads files (or stdin) and finds sequences of printable characters.`,
+	Long: `An enhanced version of the classic 'strings' utility, written in Go.`,
 	Version: "1.0.0",
 
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
