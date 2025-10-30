@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -20,10 +21,13 @@ var predefinedPatterns = map[string]string{
 	"url":         `https?://[^\s/$.?#].[^\s]*`,
 	"hash_md5":    `\b[a-fA-F\d]{32}\b`,
 	"hash_sha256": `\b[a-fA-F\d]{64}\b`,
+	"base64":      `^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$`,
 }
 
 type Config struct {
+	LengthRange   string
 	MinLength     int
+	MaxLength     int
 	RegexStr      string
 	FindStr       string
 	EntropyMin    float64
@@ -164,14 +168,13 @@ func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string
 
 		if !isEOF && isPrintable(b) {
 			if stringStartOffset == -1 {
-
 				stringStartOffset = currentFileOffset
 				stringStartLine = currentLine
 				stringStartCol = currentCol
 			}
 			currentString.WriteByte(b)
 		} else {
-			if currentString.Len() >= sp.cfg.MinLength {
+			if sp.cfg.MaxLength >= currentString.Len() && currentString.Len() >= sp.cfg.MinLength {
 				sp.processString(
 					currentString.String(),
 					stringStartOffset,
@@ -208,9 +211,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "stringx [flags] [FILE...]",
-	Short: "Finds printable strings in a file, with advanced filtering.",
-	Long: `An enhanced version of the classic 'strings' utility, written in Go.`,
+	Use:     "stringx [flags] [FILE...]",
+	Short:   "Finds printable strings in a file, with advanced filtering.",
+	Long:    `An enhanced version of the classic 'strings' utility, written in Go.`,
 	Version: "1.0.0",
 
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -244,6 +247,20 @@ var rootCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		files := args
 		processor := NewStringProcessor(&cfg, tracker, os.Stdout)
+		parts := strings.Split(cfg.LengthRange, ":")
+		if len(parts) > 0 {
+			fmt.Println(parts)
+			if parts[0] == "" {
+				cfg.MinLength = 0
+			} else {
+				fmt.Sscanf(parts[0], "%d", &cfg.MinLength)
+			}
+			if len(parts) < 2 || parts[1] == "" {
+				cfg.MaxLength = math.MaxInt32
+			} else {
+				fmt.Sscanf(parts[1], "%d", &cfg.MaxLength)
+			}
+		}
 
 		if len(files) == 0 {
 			stat, _ := os.Stdin.Stat()
@@ -293,8 +310,9 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().IntVarP(&cfg.MinLength, "min-length", "n", 4, "Minimum string length to print (default: 4)")
-	rootCmd.PersistentFlags().Float64Var(&cfg.EntropyMin, "entropy-min", 0, "Filter strings, only printing those with entropy >= this value")
+	rootCmd.PersistentFlags().StringVarP(&cfg.LengthRange, "length", "l", "0:0", "Specify string length range (MIN:MAX)")
+	rootCmd.PersistentFlags().IntVarP(&cfg.MinLength, "min-length", "n", 8, "Minimum string length to print (default: 8)")
+	rootCmd.PersistentFlags().Float64Var(&cfg.EntropyMin, "entropy-min", 3, "Filter strings, only printing those with entropy >= this value (default: 3)")
 
 	rootCmd.PersistentFlags().StringVarP(&cfg.RegexStr, "regex", "r", "", "Filter strings, only printing those that match the regex")
 
@@ -304,7 +322,7 @@ func init() {
 	}
 	sort.Strings(choices)
 	findHelp := fmt.Sprintf("Use a predefined regex pattern. Choices: %v", choices)
-	rootCmd.PersistentFlags().StringVar(&cfg.FindStr, "find", "", findHelp)
+	rootCmd.PersistentFlags().StringVarP(&cfg.FindStr, "find", "f", "", findHelp)
 
 	rootCmd.PersistentFlags().BoolVar(&cfg.JSONOut, "json", false, "Output as a stream of JSON objects (one per line)")
 	rootCmd.PersistentFlags().BoolVar(&cfg.UniqueOut, "unique", false, "Only print the first occurrence of each unique string")
