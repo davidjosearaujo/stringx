@@ -3,6 +3,9 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 )
 
 var predefinedPatterns = map[string]string{
@@ -21,7 +26,6 @@ var predefinedPatterns = map[string]string{
 	"url":         `https?://[^\s/$.?#].[^\s]*`,
 	"hash_md5":    `\b[a-fA-F\d]{32}\b`,
 	"hash_sha256": `\b[a-fA-F\d]{64}\b`,
-	"base64":      `^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$`,
 }
 
 type Config struct {
@@ -30,11 +34,14 @@ type Config struct {
 	MaxLength     int
 	RegexStr      string
 	FindStr       string
-	EntropyMin    float64
+	EntropyMin    int
 	JSONOut       bool
 	UniqueOut     bool
 	CountOut      bool
 	compiledRegex *regexp.Regexp
+
+	Encoding      string
+	DecodeMethods []string
 }
 
 type StateTracker struct {
@@ -67,7 +74,7 @@ func NewStringProcessor(cfg *Config, tracker *StateTracker, writer io.Writer) *S
 	}
 }
 
-func getEntropy(s string) float64 {
+func getEntropy(s string) int {
 	if s == "" {
 		return 0
 	}
@@ -82,11 +89,11 @@ func getEntropy(s string) float64 {
 		p := float64(count) / length
 		entropy -= p * math.Log2(p)
 	}
-	return entropy
+	return int(entropy)
 }
 
-func isPrintable(b byte) bool {
-	return (32 <= b && b <= 126) || b == 9
+func isPrintable(r rune) bool {
+	return (32 <= r && r <= 126) || r == 9
 }
 
 func (sp *StringProcessor) processString(
@@ -95,8 +102,9 @@ func (sp *StringProcessor) processString(
 	startLine int,
 	startCol int,
 	filename string,
+	currentDepth int,
 ) {
-	var entropy float64
+	var entropy int
 	if sp.cfg.EntropyMin > 0 || sp.cfg.JSONOut {
 		entropy = getEntropy(foundString)
 		if sp.cfg.EntropyMin > 0 && entropy < sp.cfg.EntropyMin {
@@ -112,40 +120,89 @@ func (sp *StringProcessor) processString(
 
 	if sp.cfg.CountOut {
 		sp.tracker.counts[foundString]++
-		return
 	}
 
 	if sp.cfg.UniqueOut {
 		if _, exists := sp.tracker.uniques[foundString]; exists {
-			return
+			if nil == sp.cfg.DecodeMethods || len(sp.cfg.DecodeMethods) == 0 {
+				return
+			}
+		} else {
+			sp.tracker.uniques[foundString] = struct{}{}
 		}
-		sp.tracker.uniques[foundString] = struct{}{}
 	}
 
-	if sp.cfg.JSONOut {
-		data := map[string]interface{}{
-			"file":    filename,
-			"string":  foundString,
-			"length":  len(foundString),
-			"entropy": math.Round(entropy*10000) / 10000,
-			"offset":  startOffset,
-			"line":    startLine,
-			"column":  startCol,
+	if !sp.cfg.CountOut {
+		if sp.cfg.JSONOut {
+			data := map[string]interface{}{
+				"file":    filename,
+				"string":  foundString,
+				"length":  len(foundString),
+				"entropy": math.Round(float64(entropy)*10000) / 10000,
+				"offset":  startOffset,
+				"line":    startLine,
+				"column":  startCol,
+			}
+			if currentDepth > 0 {
+				data["recursive_depth"] = currentDepth
+			}
+
+			jsonBytes, err := json.Marshal(data)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error marshalling JSON: %v\n", err)
+				return
+			}
+			fmt.Fprintln(sp.writer, string(jsonBytes))
+
+		} else {
+			indent := strings.Repeat("  ", currentDepth)
+			fmt.Fprintf(sp.writer, "%s%s:%d:%d:%s\n", indent, filename, startLine, startCol, foundString)
+		}
+	}
+
+	if nil == sp.cfg.DecodeMethods || len(sp.cfg.DecodeMethods) == 0 || currentDepth >= 10 {
+		return
+	}
+
+	for _, method := range sp.cfg.DecodeMethods {
+		var decodedBytes []byte
+		var err error
+
+		switch method {
+		case "base64":
+			s := strings.Map(func(r rune) rune {
+				if strings.ContainsRune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", r) {
+					return r
+				}
+				return -1
+			}, foundString)
+			if len(s)%4 != 0 {
+				s += strings.Repeat("=", 4-len(s)%4)
+			}
+			decodedBytes, err = base64.StdEncoding.DecodeString(s)
+			if err != nil {
+				decodedBytes, err = base64.StdEncoding.DecodeString(foundString)
+			}
+		case "hex":
+			s := strings.Map(func(r rune) rune {
+				if strings.ContainsRune("0123456789abcdefABCDEF", r) {
+					return r
+				}
+				return -1
+			}, foundString)
+			decodedBytes, err = hex.DecodeString(s)
 		}
 
-		jsonBytes, err := json.Marshal(data)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error marshalling JSON: %v\n", err)
-			return
-		}
-		fmt.Fprintln(sp.writer, string(jsonBytes))
+		if err == nil && len(decodedBytes) > 0 {
+			newFilename := fmt.Sprintf("%s->%s@%d", filename, method, startOffset)
+			memStream := bytes.NewReader(decodedBytes)
 
-	} else {
-		fmt.Fprintf(sp.writer, "%s:%d:%d:%s\n", filename, startLine, startCol, foundString)
+			sp.FindStringsInStream(memStream, newFilename, "ascii", currentDepth+1)
+		}
 	}
 }
 
-func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string) error {
+func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string, encoding string, currentDepth int) error {
 	reader := bufio.NewReader(stream)
 
 	var currentString bytes.Buffer
@@ -156,32 +213,84 @@ func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string
 	var stringStartLine int = -1
 	var stringStartCol int = -1
 
-	for {
-		b, err := reader.ReadByte()
+	var charSize int
+	var endianness binary.ByteOrder
+	var decoder transform.Transformer
 
-		isEOF := (err == io.EOF)
+	switch encoding {
+	case "utf-16le":
+		charSize = 2
+		endianness = binary.LittleEndian
+		decoder = unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM).NewDecoder()
+	case "utf-16be":
+		charSize = 2
+		endianness = binary.BigEndian
+		decoder = unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM).NewDecoder()
+	case "ascii":
+		charSize = 1
+	default:
+		return fmt.Errorf("unsupported encoding: %s", encoding)
+	}
+
+	charBuf := make([]byte, charSize)
+
+	for {
+		n, err := io.ReadFull(reader, charBuf)
+		isEOF := (err == io.EOF || err == io.ErrUnexpectedEOF)
 		if err != nil && !isEOF {
 			return fmt.Errorf("error reading %s: %w", filename, err)
+		}
+		if n == 0 && isEOF {
+			break
+		}
+
+		var r rune
+		if encoding == "ascii" {
+			r = rune(charBuf[0])
+		} else if endianness == binary.LittleEndian {
+			r = rune(binary.LittleEndian.Uint16(charBuf))
+		} else {
+			r = rune(binary.BigEndian.Uint16(charBuf))
 		}
 
 		currentFileOffset := fileOffset
 
-		if !isEOF && isPrintable(b) {
+		if !isEOF && isPrintable(r) {
 			if stringStartOffset == -1 {
 				stringStartOffset = currentFileOffset
 				stringStartLine = currentLine
 				stringStartCol = currentCol
 			}
-			currentString.WriteByte(b)
+			currentString.Write(charBuf[:n])
 		} else {
-			if sp.cfg.MaxLength >= currentString.Len() && currentString.Len() >= sp.cfg.MinLength {
-				sp.processString(
-					currentString.String(),
-					stringStartOffset,
-					stringStartLine,
-					stringStartCol,
-					filename,
-				)
+			if currentString.Len() > 0 {
+				var decodedString string
+				if encoding == "ascii" {
+					decodedString = currentString.String()
+				} else {
+					utf8Bytes, _, err := transform.Bytes(decoder, currentString.Bytes())
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: could not decode string at %d: %v\n", stringStartOffset, err)
+						decodedString = "" 
+					} else {
+						decodedString = string(utf8Bytes)
+					}
+				}
+
+				strLen := len(decodedString)
+				if decodedString != "" &&
+					sp.cfg.MaxLength >= strLen &&
+					strLen >= sp.cfg.MinLength {
+
+					sp.processString(
+						decodedString,
+						stringStartOffset,
+						stringStartLine,
+						stringStartCol,
+						filename,
+						currentDepth,
+					)
+				}
 			}
 
 			currentString.Reset()
@@ -194,13 +303,13 @@ func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string
 			break
 		}
 
-		if b == '\n' {
+		if r == '\n' {
 			currentLine++
 			currentCol = 1
 		} else {
 			currentCol++
 		}
-		fileOffset++
+		fileOffset += int64(n)
 	}
 	return nil
 }
@@ -214,7 +323,7 @@ var rootCmd = &cobra.Command{
 	Use:     "stringx [flags] [FILE...]",
 	Short:   "Finds printable strings in a file, with advanced filtering.",
 	Long:    `An enhanced version of the classic 'strings' utility, written in Go.`,
-	Version: "1.0.0",
+	Version: "2.0.0",
 
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 
@@ -239,14 +348,6 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
-		tracker = NewStateTracker(&cfg)
-
-		return nil
-	},
-
-	RunE: func(cmd *cobra.Command, args []string) error {
-		files := args
-		processor := NewStringProcessor(&cfg, tracker, os.Stdout)
 		parts := strings.Split(cfg.LengthRange, ":")
 		if len(parts) > 0 {
 			if parts[0] == "" {
@@ -261,13 +362,21 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
+		tracker = NewStateTracker(&cfg)
+		return nil
+	},
+
+	RunE: func(cmd *cobra.Command, args []string) error {
+		files := args
+		processor := NewStringProcessor(&cfg, tracker, os.Stdout)
+
 		if len(files) == 0 {
 			stat, _ := os.Stdin.Stat()
 			if (stat.Mode() & os.ModeCharDevice) != 0 {
 				return cmd.Help()
 			}
 
-			if err := processor.FindStringsInStream(os.Stdin, "<stdin>"); err != nil {
+			if err := processor.FindStringsInStream(os.Stdin, "<stdin>", cfg.Encoding, 0); err != nil {
 				fmt.Fprintf(os.Stderr, "Error processing stdin: %v\n", err)
 			}
 		} else {
@@ -278,7 +387,7 @@ var rootCmd = &cobra.Command{
 					continue
 				}
 
-				err = processor.FindStringsInStream(file, filename)
+				err = processor.FindStringsInStream(file, filename, cfg.Encoding, 0)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", filename, err)
 				}
@@ -309,8 +418,8 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&cfg.LengthRange, "length", "l", "8:", "Specify string length range MIN:MAX or MIN: or :MAX")
-	rootCmd.PersistentFlags().Float64Var(&cfg.EntropyMin, "entropy-min", 3, "Filter strings, only printing those with entropy >= this value")
+	rootCmd.PersistentFlags().StringVarP(&cfg.LengthRange, "length", "l", "4:", "Specify string length range MIN:MAX or MIN: or :MAX")
+	rootCmd.PersistentFlags().IntVar(&cfg.EntropyMin, "entropy-min", 0, "Filter strings, only printing those with entropy >= this value")
 
 	rootCmd.PersistentFlags().StringVarP(&cfg.RegexStr, "regex", "r", "", "Filter strings, only printing those that match the regex")
 
@@ -327,9 +436,16 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&cfg.CountOut, "count", false, "Count occurrences of each string and print a summary at the end")
 
 	rootCmd.MarkFlagsMutuallyExclusive("json", "unique", "count")
+
+	rootCmd.PersistentFlags().StringVarP(&cfg.Encoding, "encoding", "e", "ascii", "Encoding to search for (ascii, utf-16le, utf-16be)")
+	rootCmd.PersistentFlags().StringSliceVarP(&cfg.DecodeMethods, "decode", "d", nil, "Try to decode found strings with (base64, hex)")
 }
 
 func main() {
+	_ = binary.BigEndian
+	_ = transform.ErrShortDst
+	_ = unicode.ErrMissingBOM
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
