@@ -309,8 +309,8 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&cfg.LengthRange, "length", "l", "8", "Specify string length range MIN:MAX or MIN: or :MAX (default: 8, no maximum)")
-	rootCmd.PersistentFlags().Float64Var(&cfg.EntropyMin, "entropy-min", 3, "Filter strings, only printing those with entropy >= this value (default: 3)")
+	rootCmd.PersistentFlags().StringVarP(&cfg.LengthRange, "length", "l", "8:", "Specify string length range MIN:MAX or MIN: or :MAX")
+	rootCmd.PersistentFlags().Float64Var(&cfg.EntropyMin, "entropy-min", 3, "Filter strings, only printing those with entropy >= this value")
 
 	rootCmd.PersistentFlags().StringVarP(&cfg.RegexStr, "regex", "r", "", "Filter strings, only printing those that match the regex")
 
