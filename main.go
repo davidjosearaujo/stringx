@@ -249,7 +249,6 @@ var rootCmd = &cobra.Command{
 		processor := NewStringProcessor(&cfg, tracker, os.Stdout)
 		parts := strings.Split(cfg.LengthRange, ":")
 		if len(parts) > 0 {
-			fmt.Println(parts)
 			if parts[0] == "" {
 				cfg.MinLength = 0
 			} else {
