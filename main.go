@@ -38,6 +38,7 @@ type Config struct {
 	JSONOut       bool
 	UniqueOut     bool
 	CountOut      bool
+	QuietOut      bool // Added QuietOut flag
 	compiledRegex *regexp.Regexp
 
 	Encoding      string
@@ -149,14 +150,20 @@ func (sp *StringProcessor) processString(
 
 			jsonBytes, err := json.Marshal(data)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error marshalling JSON: %v\n", err)
+				if !sp.cfg.QuietOut {
+					fmt.Fprintf(os.Stderr, "Error marshalling JSON: %v\n", err)
+				}
 				return
 			}
 			fmt.Fprintln(sp.writer, string(jsonBytes))
 
 		} else {
-			indent := strings.Repeat("  ", currentDepth)
-			fmt.Fprintf(sp.writer, "%s%s:%d:%d:%s\n", indent, filename, startLine, startCol, foundString)
+			if !sp.cfg.QuietOut {
+				indent := strings.Repeat("  ", currentDepth)
+				fmt.Fprintf(sp.writer, "%s%s:%d:%d:%s\n", indent, filename, startLine, startCol, foundString)
+			} else {
+				fmt.Fprintf(sp.writer, "%s\n", foundString)
+			}
 		}
 	}
 
@@ -270,7 +277,9 @@ func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string
 				} else {
 					utf8Bytes, _, err := transform.Bytes(decoder, currentString.Bytes())
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "Warning: could not decode string at %d: %v\n", stringStartOffset, err)
+						if !sp.cfg.QuietOut { // Check for QuietOut
+							fmt.Fprintf(os.Stderr, "Warning: could not decode string at %d: %v\n", stringStartOffset, err)
+						}
 						decodedString = "" 
 					} else {
 						decodedString = string(utf8Bytes)
@@ -323,7 +332,7 @@ var rootCmd = &cobra.Command{
 	Use:     "stringx [flags] [FILE...]",
 	Short:   "Finds printable strings in a file, with advanced filtering.",
 	Long:    `An enhanced version of the classic 'strings' utility, written in Go.`,
-	Version: "0.1.0",
+	Version: "0.1.1",
 
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 
@@ -377,19 +386,25 @@ var rootCmd = &cobra.Command{
 			}
 
 			if err := processor.FindStringsInStream(os.Stdin, "<stdin>", cfg.Encoding, 0); err != nil {
-				fmt.Fprintf(os.Stderr, "Error processing stdin: %v\n", err)
+				if !cfg.QuietOut { // Check for QuietOut
+					fmt.Fprintf(os.Stderr, "Error processing stdin: %v\n", err)
+				}
 			}
 		} else {
 			for _, filename := range files {
 				file, err := os.Open(filename)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error: File not found: %s\n", filename)
+					if !cfg.QuietOut { // Check for QuietOut
+						fmt.Fprintf(os.Stderr, "Error: File not found: %s\n", filename)
+					}
 					continue
 				}
 
 				err = processor.FindStringsInStream(file, filename, cfg.Encoding, 0)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", filename, err)
+					if !cfg.QuietOut { // Check for QuietOut
+						fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", filename, err)
+					}
 				}
 				file.Close()
 			}
@@ -434,6 +449,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&cfg.JSONOut, "json", false, "Output as a stream of JSON objects (one per line)")
 	rootCmd.PersistentFlags().BoolVar(&cfg.UniqueOut, "unique", false, "Only print the first occurrence of each unique string")
 	rootCmd.PersistentFlags().BoolVar(&cfg.CountOut, "count", false, "Count occurrences of each string and print a summary at the end")
+	
+	rootCmd.PersistentFlags().BoolVarP(&cfg.QuietOut, "quiet", "q", false, "Suppress all error messages and status output (pipeline friendly)")
 
 	rootCmd.MarkFlagsMutuallyExclusive("json", "unique", "count")
 
