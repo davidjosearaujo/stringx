@@ -68,3 +68,4 @@ stringx logs/*.log -f hash_sha256 --count
 | `--count` | | Count occurrences of each string and print a summary. | `--count` |
 | `--unique` | | Only print the first occurrence of each unique string. | `--unique` |
 | `--json` | | Output results as a stream of JSON objects (one per line). | `--json` |
+| `--quiet` | `-q` | Suppress all error messages and status output (pipeline friendly) | `-q` |
