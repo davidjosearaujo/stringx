@@ -9,7 +9,7 @@ Inspired by the classic UNIX `strings` tool, `stringx` goes beyond basic extract
 - **Flexible Length Filtering:** Use the powerful `-l, --length` flag to define minimum, maximum, or a range of string lengths (`MIN:MAX`, `MIN:`, or `:MAX`).
 - **Recursive Decoding:** Automatically decode embedded Base64 or Hex strings and search for further strings within the decoded content (`-d, --decode base64` or `--decode hex`).
 - **Encoding Support:** Search within multi-byte data streams, including **UTF-16 Little Endian** (`utf-16le`) and **UTF-16 Big Endian** (`utf-16be`), not just standard ASCII.
-- **Entropy Filtering:** Identify potentially sensitive or compressed data by filtering strings based on their Shannon entropy (`--entropy-min`).
+- **Entropy Filtering:** Identify potentially sensitive or compressed data by filtering strings based on their Shannon entropy (`--entropy`).
 - **Predefined Regex:** Quickly filter for common data patterns like IP addresses, URLs, MD5/SHA256 hashes, and emails (`-f, --find ip`).
 - **Data Analysis Output:** Get summary counts of unique strings (`--count`) or output results as **JSON** for easy integration into other tools (`--json`).
 - **Wordlist search:** Provide a wordlist file to search for multiple words, *fuzzing* style.
@@ -29,7 +29,7 @@ stringx [flags] [FILE...]
 Search a binary file for strings longer than 16 characters that have an entropy score above 4.0, indicating potential key material or compressed blobs:
 
 ```shell
-stringx my_binary -l 16: --entropy-min 4.0
+stringx my_binary -l 16: --entropy 4.0
 ```
 
 ### 2. Recursive Decoding and Searching
