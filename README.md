@@ -12,6 +12,7 @@ Inspired by the classic UNIX `strings` tool, `stringx` goes beyond basic extract
 - **Entropy Filtering:** Identify potentially sensitive or compressed data by filtering strings based on their Shannon entropy (`--entropy-min`).
 - **Predefined Regex:** Quickly filter for common data patterns like IP addresses, URLs, MD5/SHA256 hashes, and emails (`-f, --find ip`).
 - **Data Analysis Output:** Get summary counts of unique strings (`--count`) or output results as **JSON** for easy integration into other tools (`--json`).
+- **Wordlist search:** Provide a wordlist file to search for multiple words, *fuzzing* style.
 
 ## Usage
 
@@ -62,10 +63,11 @@ stringx logs/*.log -f hash_sha256 --count
 | `--length` | `-l` | Specify string length range. Use `MIN:MAX`, `MIN:`, or `:MAX`. | `-l 10:50` (10 to 50 chars) |
 | `--encoding` | `-e` | Encoding to search for (`ascii`, `utf-16le`, `utf-16be`). | `-e utf-16le` |
 | `--decode` | `-d` | Try to recursively decode found strings using methods (e.g., `base64`, `hex`). | `-d base64` |
-| `--entropy-min` | | Filter strings with entropy >= this value (e.g., 4). | `--entropy-min 3` |
+| `--entropy` | | Filter strings with entropy >= this value (e.g., 4). | `--entropy 3` |
 | `--regex` | `-r` | Filter strings, only printing those that match the regex. | `-r 'KEY_[A-Z0-9]{20}'` |
 | `--find` | `-f` | Use a predefined regex pattern. Choices: `ip`, `email`, `url`, `hash_md5`, `hash_sha256`. | `-f email` |
 | `--count` | | Count occurrences of each string and print a summary. | `--count` |
 | `--unique` | | Only print the first occurrence of each unique string. | `--unique` |
 | `--json` | | Output results as a stream of JSON objects (one per line). | `--json` |
 | `--quiet` | `-q` | Suppress all error messages and status output (pipeline friendly) | `-q` |
+| `--wordlist` | `-w` | Search for multiple words (\"Fuzzing\" style) from a wordlist file | `-w seclists/Passwords/Leaked-Databases/rockyou.txt` |

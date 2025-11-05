@@ -34,15 +34,16 @@ type Config struct {
 	MaxLength     int
 	RegexStr      string
 	FindStr       string
-	EntropyMin    int
+	EntropyMin    float64
 	JSONOut       bool
 	UniqueOut     bool
 	CountOut      bool
-	QuietOut      bool // Added QuietOut flag
+	QuietOut      bool
 	compiledRegex *regexp.Regexp
 
 	Encoding      string
 	DecodeMethods []string
+	WordList      string
 }
 
 type StateTracker struct {
@@ -75,7 +76,7 @@ func NewStringProcessor(cfg *Config, tracker *StateTracker, writer io.Writer) *S
 	}
 }
 
-func getEntropy(s string) int {
+func getEntropy(s string) float64 {
 	if s == "" {
 		return 0
 	}
@@ -90,7 +91,7 @@ func getEntropy(s string) int {
 		p := float64(count) / length
 		entropy -= p * math.Log2(p)
 	}
-	return int(entropy)
+	return entropy
 }
 
 func isPrintable(r rune) bool {
@@ -105,7 +106,7 @@ func (sp *StringProcessor) processString(
 	filename string,
 	currentDepth int,
 ) {
-	var entropy int
+	var entropy float64
 	if sp.cfg.EntropyMin > 0 || sp.cfg.JSONOut {
 		entropy = getEntropy(foundString)
 		if sp.cfg.EntropyMin > 0 && entropy < sp.cfg.EntropyMin {
@@ -139,7 +140,7 @@ func (sp *StringProcessor) processString(
 				"file":    filename,
 				"string":  foundString,
 				"length":  len(foundString),
-				"entropy": math.Round(float64(entropy)*10000) / 10000,
+				"entropy": math.Round(entropy*10000) / 10000,
 				"offset":  startOffset,
 				"line":    startLine,
 				"column":  startCol,
@@ -254,10 +255,14 @@ func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string
 		var r rune
 		if encoding == "ascii" {
 			r = rune(charBuf[0])
-		} else if endianness == binary.LittleEndian {
-			r = rune(binary.LittleEndian.Uint16(charBuf))
+		} else if n == 2 {
+			if endianness == binary.LittleEndian {
+				r = rune(binary.LittleEndian.Uint16(charBuf))
+			} else {
+				r = rune(binary.BigEndian.Uint16(charBuf))
+			}
 		} else {
-			r = rune(binary.BigEndian.Uint16(charBuf))
+			r = 0
 		}
 
 		currentFileOffset := fileOffset
@@ -277,10 +282,10 @@ func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string
 				} else {
 					utf8Bytes, _, err := transform.Bytes(decoder, currentString.Bytes())
 					if err != nil {
-						if !sp.cfg.QuietOut { // Check for QuietOut
+						if !sp.cfg.QuietOut {
 							fmt.Fprintf(os.Stderr, "Warning: could not decode string at %d: %v\n", stringStartOffset, err)
 						}
-						decodedString = "" 
+						decodedString = ""
 					} else {
 						decodedString = string(utf8Bytes)
 					}
@@ -330,14 +335,24 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:     "stringx [flags] [FILE...]",
-	Short:   "Finds printable strings in a file, with advanced filtering.",
+	Short:   "Finds printable strings in a file, with advanced filtering and tooling",
 	Long:    `An enhanced version of the classic 'strings' utility, written in Go.`,
-	Version: "0.1.1",
+	Version: "0.2.0",
 
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 
-		if cfg.RegexStr != "" && cfg.FindStr != "" {
-			return fmt.Errorf("flags --regex and --find are mutually exclusive")
+		exclusiveFlags := 0
+		if cfg.RegexStr != "" {
+			exclusiveFlags++
+		}
+		if cfg.FindStr != "" {
+			exclusiveFlags++
+		}
+		if cfg.WordList != "" {
+			exclusiveFlags++
+		}
+		if exclusiveFlags > 1 {
+			return fmt.Errorf("flags --regex, --find, and --wordlist are mutually exclusive")
 		}
 
 		pattern := cfg.RegexStr
@@ -346,6 +361,31 @@ var rootCmd = &cobra.Command{
 			pattern, exists = predefinedPatterns[cfg.FindStr]
 			if !exists {
 				return fmt.Errorf("unknown --find pattern: %s", cfg.FindStr)
+			}
+		} else if cfg.WordList != "" {
+			file, err := os.Open(cfg.WordList)
+			if err != nil {
+				return fmt.Errorf("could not open wordlist file %s: %w", cfg.WordList, err)
+			}
+			defer file.Close()
+
+			var escapedWords []string
+			scanner := bufio.NewScanner(file)
+			for scanner.Scan() {
+				word := strings.TrimSpace(scanner.Text())
+				if word != "" {
+					escapedWords = append(escapedWords, regexp.QuoteMeta(word))
+				}
+			}
+			if err := scanner.Err(); err != nil {
+				return fmt.Errorf("error reading wordlist file %s: %w", cfg.WordList, err)
+			}
+
+			if len(escapedWords) == 0 {
+				fmt.Fprintf(os.Stderr, "Warning: wordlist file %s is empty\n", cfg.WordList)
+				pattern = ""
+			} else {
+				pattern = "(" + strings.Join(escapedWords, "|") + ")"
 			}
 		}
 
@@ -386,7 +426,7 @@ var rootCmd = &cobra.Command{
 			}
 
 			if err := processor.FindStringsInStream(os.Stdin, "<stdin>", cfg.Encoding, 0); err != nil {
-				if !cfg.QuietOut { // Check for QuietOut
+				if !cfg.QuietOut {
 					fmt.Fprintf(os.Stderr, "Error processing stdin: %v\n", err)
 				}
 			}
@@ -394,7 +434,7 @@ var rootCmd = &cobra.Command{
 			for _, filename := range files {
 				file, err := os.Open(filename)
 				if err != nil {
-					if !cfg.QuietOut { // Check for QuietOut
+					if !cfg.QuietOut {
 						fmt.Fprintf(os.Stderr, "Error: File not found: %s\n", filename)
 					}
 					continue
@@ -402,7 +442,7 @@ var rootCmd = &cobra.Command{
 
 				err = processor.FindStringsInStream(file, filename, cfg.Encoding, 0)
 				if err != nil {
-					if !cfg.QuietOut { // Check for QuietOut
+					if !cfg.QuietOut {
 						fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", filename, err)
 					}
 				}
@@ -434,7 +474,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfg.LengthRange, "length", "l", "4:", "Specify string length range MIN:MAX or MIN: or :MAX")
-	rootCmd.PersistentFlags().IntVar(&cfg.EntropyMin, "entropy-min", 0, "Filter strings, only printing those with entropy >= this value")
+	rootCmd.PersistentFlags().Float64Var(&cfg.EntropyMin, "entropy", 0, "Filter strings, only printing those with entropy >= this value")
 
 	rootCmd.PersistentFlags().StringVarP(&cfg.RegexStr, "regex", "r", "", "Filter strings, only printing those that match the regex")
 
@@ -446,13 +486,16 @@ func init() {
 	findHelp := fmt.Sprintf("Use a predefined regex pattern. Choices: %v", choices)
 	rootCmd.PersistentFlags().StringVarP(&cfg.FindStr, "find", "f", "", findHelp)
 
+	rootCmd.PersistentFlags().StringVarP(&cfg.WordList, "wordlist", "w", "", "Search for multiple words (\"Fuzzing\" style) from a wordlist file")
+
 	rootCmd.PersistentFlags().BoolVar(&cfg.JSONOut, "json", false, "Output as a stream of JSON objects (one per line)")
 	rootCmd.PersistentFlags().BoolVar(&cfg.UniqueOut, "unique", false, "Only print the first occurrence of each unique string")
 	rootCmd.PersistentFlags().BoolVar(&cfg.CountOut, "count", false, "Count occurrences of each string and print a summary at the end")
-	
+
 	rootCmd.PersistentFlags().BoolVarP(&cfg.QuietOut, "quiet", "q", false, "Suppress all error messages and status output (pipeline friendly)")
 
 	rootCmd.MarkFlagsMutuallyExclusive("json", "unique", "count")
+	rootCmd.MarkFlagsMutuallyExclusive("regex", "find", "wordlist")
 
 	rootCmd.PersistentFlags().StringVarP(&cfg.Encoding, "encoding", "e", "ascii", "Encoding to search for (ascii, utf-16le, utf-16be)")
 	rootCmd.PersistentFlags().StringSliceVarP(&cfg.DecodeMethods, "decode", "d", nil, "Try to decode found strings with (base64, hex)")
