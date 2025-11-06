@@ -485,7 +485,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfg.LengthRange, "length", "l", "4:", "Specify string length range MIN:MAX or MIN: or :MAX")
 	rootCmd.PersistentFlags().Float64Var(&cfg.EntropyMin, "entropy", 0, "Filter strings, only printing those with entropy >= this value")
 
-	rootCmd.PersistentFlags().StringVarP(&cfg.RegexStr, "regex", "r", "", "Filter strings, only printing those that match the regex (AND)")
+	rootCmd.PersistentFlags().StringVarP(&cfg.RegexStr, "regex", "r", "", "Filter strings, only printing those that match the regex")
 	rootCmd.PersistentFlags().StringVarP(&cfg.ExcludeStr, "exclude", "x", "", "Exclude strings that match this regex")
 
 	var choices []string
@@ -493,10 +493,10 @@ func init() {
 		choices = append(choices, k)
 	}
 	sort.Strings(choices)
-	findHelp := fmt.Sprintf("Use a predefined regex pattern. Choices: %v (AND)", choices)
+	findHelp := fmt.Sprintf("Use a predefined regex pattern. Choices: %v", choices)
 	rootCmd.PersistentFlags().StringVarP(&cfg.FindStr, "find", "f", "", findHelp)
 
-	rootCmd.PersistentFlags().StringVarP(&cfg.WordList, "wordlist", "w", "", "Search for multiple words from a wordlist file (AND)")
+	rootCmd.PersistentFlags().StringVarP(&cfg.WordList, "wordlist", "w", "", "Search for multiple words from a wordlist file")
 
 	rootCmd.PersistentFlags().BoolVar(&cfg.JSONOut, "json", false, "Output as a stream of JSON objects (one per line)")
 	rootCmd.PersistentFlags().BoolVar(&cfg.UniqueOut, "unique", false, "Only print the first occurrence of each unique string")
