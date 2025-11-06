@@ -39,11 +39,13 @@ type Config struct {
 	UniqueOut     bool
 	CountOut      bool
 	QuietOut      bool
-	compiledRegex *regexp.Regexp
-
+	WordList      string
+	ExcludeStr    string
 	Encoding      string
 	DecodeMethods []string
-	WordList      string
+
+	compiledIncludeRegexes []*regexp.Regexp
+	compiledExcludeRegex   *regexp.Regexp
 }
 
 type StateTracker struct {
@@ -114,9 +116,17 @@ func (sp *StringProcessor) processString(
 		}
 	}
 
-	if sp.cfg.compiledRegex != nil {
-		if !sp.cfg.compiledRegex.MatchString(foundString) {
+	if sp.cfg.compiledExcludeRegex != nil {
+		if sp.cfg.compiledExcludeRegex.MatchString(foundString) {
 			return
+		}
+	}
+
+	if len(sp.cfg.compiledIncludeRegexes) > 0 {
+		for _, r := range sp.cfg.compiledIncludeRegexes {
+			if !r.MatchString(foundString) {
+				return
+			}
 		}
 	}
 
@@ -337,32 +347,23 @@ var rootCmd = &cobra.Command{
 	Use:     "stringx [flags] [FILE...]",
 	Short:   "Finds printable strings in a file, with advanced filtering and tooling",
 	Long:    `An enhanced version of the classic 'strings' utility, written in Go.`,
-	Version: "0.2.0",
+	Version: "0.1.0",
 
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 
-		exclusiveFlags := 0
-		if cfg.RegexStr != "" {
-			exclusiveFlags++
-		}
-		if cfg.FindStr != "" {
-			exclusiveFlags++
-		}
-		if cfg.WordList != "" {
-			exclusiveFlags++
-		}
-		if exclusiveFlags > 1 {
-			return fmt.Errorf("flags --regex, --find, and --wordlist are mutually exclusive")
-		}
+		var includePatterns []string
 
-		pattern := cfg.RegexStr
+		if cfg.RegexStr != "" {
+			includePatterns = append(includePatterns, cfg.RegexStr)
+		}
 		if cfg.FindStr != "" {
-			var exists bool
-			pattern, exists = predefinedPatterns[cfg.FindStr]
+			pattern, exists := predefinedPatterns[cfg.FindStr]
 			if !exists {
 				return fmt.Errorf("unknown --find pattern: %s", cfg.FindStr)
 			}
-		} else if cfg.WordList != "" {
+			includePatterns = append(includePatterns, pattern)
+		}
+		if cfg.WordList != "" {
 			file, err := os.Open(cfg.WordList)
 			if err != nil {
 				return fmt.Errorf("could not open wordlist file %s: %w", cfg.WordList, err)
@@ -381,19 +382,27 @@ var rootCmd = &cobra.Command{
 				return fmt.Errorf("error reading wordlist file %s: %w", cfg.WordList, err)
 			}
 
-			if len(escapedWords) == 0 {
-				fmt.Fprintf(os.Stderr, "Warning: wordlist file %s is empty\n", cfg.WordList)
-				pattern = ""
+			if len(escapedWords) > 0 {
+				pattern := "(" + strings.Join(escapedWords, "|") + ")"
+				includePatterns = append(includePatterns, pattern)
 			} else {
-				pattern = "(" + strings.Join(escapedWords, "|") + ")"
+				fmt.Fprintf(os.Stderr, "Warning: wordlist file %s is empty\n", cfg.WordList)
 			}
 		}
 
-		if pattern != "" {
-			var err error
-			cfg.compiledRegex, err = regexp.Compile(pattern)
+		for _, pattern := range includePatterns {
+			r, err := regexp.Compile(pattern)
 			if err != nil {
-				return fmt.Errorf("invalid regex '%s': %w", pattern, err)
+				return fmt.Errorf("invalid include regex '%s': %w", pattern, err)
+			}
+			cfg.compiledIncludeRegexes = append(cfg.compiledIncludeRegexes, r)
+		}
+
+		if cfg.ExcludeStr != "" {
+			var err error
+			cfg.compiledExcludeRegex, err = regexp.Compile(cfg.ExcludeStr)
+			if err != nil {
+				return fmt.Errorf("invalid exclude regex '%s': %w", cfg.ExcludeStr, err)
 			}
 		}
 
@@ -476,17 +485,18 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfg.LengthRange, "length", "l", "4:", "Specify string length range MIN:MAX or MIN: or :MAX")
 	rootCmd.PersistentFlags().Float64Var(&cfg.EntropyMin, "entropy", 0, "Filter strings, only printing those with entropy >= this value")
 
-	rootCmd.PersistentFlags().StringVarP(&cfg.RegexStr, "regex", "r", "", "Filter strings, only printing those that match the regex")
+	rootCmd.PersistentFlags().StringVarP(&cfg.RegexStr, "regex", "r", "", "Filter strings, only printing those that match the regex (AND)")
+	rootCmd.PersistentFlags().StringVarP(&cfg.ExcludeStr, "exclude", "x", "", "Exclude strings that match this regex")
 
 	var choices []string
 	for k := range predefinedPatterns {
 		choices = append(choices, k)
 	}
 	sort.Strings(choices)
-	findHelp := fmt.Sprintf("Use a predefined regex pattern. Choices: %v", choices)
+	findHelp := fmt.Sprintf("Use a predefined regex pattern. Choices: %v (AND)", choices)
 	rootCmd.PersistentFlags().StringVarP(&cfg.FindStr, "find", "f", "", findHelp)
 
-	rootCmd.PersistentFlags().StringVarP(&cfg.WordList, "wordlist", "w", "", "Search for multiple words (\"Fuzzing\" style) from a wordlist file")
+	rootCmd.PersistentFlags().StringVarP(&cfg.WordList, "wordlist", "w", "", "Search for multiple words from a wordlist file (AND)")
 
 	rootCmd.PersistentFlags().BoolVar(&cfg.JSONOut, "json", false, "Output as a stream of JSON objects (one per line)")
 	rootCmd.PersistentFlags().BoolVar(&cfg.UniqueOut, "unique", false, "Only print the first occurrence of each unique string")
@@ -495,7 +505,6 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&cfg.QuietOut, "quiet", "q", false, "Suppress all error messages and status output (pipeline friendly)")
 
 	rootCmd.MarkFlagsMutuallyExclusive("json", "unique", "count")
-	rootCmd.MarkFlagsMutuallyExclusive("regex", "find", "wordlist")
 
 	rootCmd.PersistentFlags().StringVarP(&cfg.Encoding, "encoding", "e", "ascii", "Encoding to search for (ascii, utf-16le, utf-16be)")
 	rootCmd.PersistentFlags().StringSliceVarP(&cfg.DecodeMethods, "decode", "d", nil, "Try to decode found strings with (base64, hex)")
