@@ -56,6 +56,14 @@ Find all strings matching a 64-character SHA256 hash pattern and print a summary
 stringx logs/*.log -f hash_sha256 --count
 ```
 
+### 5. Excluding Localhost URLs
+
+Find all strings matching a URL pattern, but exclude any that specifically contain "localhost" to focus on external resources:
+
+```shell
+stringx config.ini -f url --exclude 'http://localhost'
+```
+
 ## Command Reference
 
 | Flag | Short | Description | Example
@@ -65,6 +73,7 @@ stringx logs/*.log -f hash_sha256 --count
 | `--decode` | `-d` | Try to recursively decode found strings using methods (e.g., `base64`, `hex`). | `-d base64` |
 | `--entropy` | | Filter strings with entropy >= this value (e.g., 4). | `--entropy 3` |
 | `--regex` | `-r` | Filter strings, only printing those that match the regex. | `-r 'KEY_[A-Z0-9]{20}'` |
+| `--exclude` | `-x` | Exclude strings that match this regex. | `-x 'http://localhost'` |
 | `--find` | `-f` | Use a predefined regex pattern. Choices: `ip`, `email`, `url`, `hash_md5`, `hash_sha256`. | `-f email` |
 | `--count` | | Count occurrences of each string and print a summary. | `--count` |
 | `--unique` | | Only print the first occurrence of each unique string. | `--unique` |
