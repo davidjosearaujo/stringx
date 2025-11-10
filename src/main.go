@@ -18,7 +18,192 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
+	"golang.org/x/term" 
 )
+
+type FullPager struct {
+	lines      []string
+	termHeight int
+	isTerminal bool
+	quiet      bool
+	cursorLine int 
+}
+
+func NewFullPager(quiet bool) *FullPager {
+	p := &FullPager{
+		quiet:      quiet,
+		lines:      make([]string, 0, 100),
+		cursorLine: 0,
+	}
+
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		p.isTerminal = true
+		if h, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+			p.termHeight = h - 1
+		} else {
+			p.termHeight = 24
+		}
+	} else {
+		p.termHeight = math.MaxInt32
+	}
+
+	return p
+}
+
+func (p *FullPager) Write(data []byte) (n int, err error) {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		p.lines = append(p.lines, scanner.Text())
+	}
+	
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		return 0, err
+	}
+	
+	return len(data), nil
+}
+
+func (p *FullPager) Show() error {
+	if !p.isTerminal {
+		for _, line := range p.lines {
+			fmt.Fprintln(os.Stdout, line)
+		}
+		return nil
+	}
+
+	fmt.Fprint(os.Stdout, "\033[?1049h")
+
+	defer fmt.Fprint(os.Stdout, "\033[?1049l")
+
+
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		for _, line := range p.lines {
+			fmt.Fprintln(os.Stdout, line)
+		}
+		return err
+	}
+	defer term.Restore(int(os.Stdin.Fd()), oldState)
+
+	reader := bufio.NewReader(os.Stdin)
+	p.refreshScreen()
+
+	const scrollUp = '\x01'
+	const scrollDown = '\x02'
+
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return nil
+		}
+		
+		r := rune(b)
+
+		if b == 27 {
+			if reader.Buffered() > 1 {
+				sequence, err := reader.Peek(2)
+				if err == nil && sequence[0] == 91 {
+					reader.ReadByte()
+					keyByte, _ := reader.ReadByte()
+
+					switch keyByte {
+					case 65:
+						r = scrollUp
+					case 66:
+						r = scrollDown
+					default:
+						continue
+					}
+				}
+			}
+		}
+
+		maxScrollLine := len(p.lines) - p.termHeight
+		if maxScrollLine < 0 { maxScrollLine = 0 }
+
+		switch r {
+		case 'q', 'Q':
+			return nil
+		case scrollDown, '\n':
+			if p.cursorLine < maxScrollLine {
+				p.cursorLine++
+			}
+		case scrollUp:
+			if p.cursorLine > 0 {
+				p.cursorLine--
+			}
+		case ' ':
+			p.cursorLine += p.termHeight
+			if p.cursorLine > maxScrollLine {
+				p.cursorLine = maxScrollLine
+			}
+		case 'b', 'B':
+			p.cursorLine -= p.termHeight
+			if p.cursorLine < 0 {
+				p.cursorLine = 0
+			}
+		case 'g':
+			p.cursorLine = 0
+		case 'G':
+			p.cursorLine = maxScrollLine
+		}
+		
+		p.refreshScreen()
+	}
+}
+
+func (p *FullPager) refreshScreen() {
+	fmt.Fprint(os.Stdout, "\033[2J\033[H")
+
+	endLine := p.cursorLine + p.termHeight
+	if endLine > len(p.lines) {
+		endLine = len(p.lines)
+	}
+
+	for _, line := range p.lines[p.cursorLine:endLine] {
+		fmt.Fprint(os.Stdout, line+"\r\n") 
+	}
+
+	linesPrinted := endLine - p.cursorLine
+	for i := linesPrinted; i < p.termHeight; i++ {
+		fmt.Fprint(os.Stdout, "~\r\n") 
+	}
+
+	p.showPrompt()
+}
+
+func (p *FullPager) showPrompt() {
+	if p.quiet {
+		return
+	}
+
+	fmt.Fprintf(os.Stdout, "\033[%d;1H", p.termHeight+1)
+
+	totalLines := len(p.lines)
+	
+	fmt.Fprint(os.Stdout, "\033[K") 
+
+	if totalLines == 0 {
+		fmt.Fprint(os.Stdout, "(empty file)")
+		return
+	}
+
+	currentLineIndex := p.cursorLine
+	
+	isEnd := (currentLineIndex + p.termHeight) >= totalLines
+
+	if isEnd {
+		fmt.Fprintf(os.Stdout, "--- (END) ---")
+	} else {
+		percent := int(math.Round(float64(currentLineIndex + p.termHeight) / float64(totalLines) * 100))
+		if percent > 100 { percent = 100 }
+		
+		fmt.Fprintf(os.Stdout, "--- %d/%d (%d%%) --- (Up/Down/Enter: line, space/b: page, g/G: top/bottom, q: quit)",
+			currentLineIndex + 1, totalLines, percent)
+	}
+	
+	fmt.Fprintf(os.Stdout, "\033[H")
+}
 
 var predefinedPatterns = map[string]string{
 	"ip":          `\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`,
@@ -43,6 +228,7 @@ type Config struct {
 	ExcludeStr    string
 	Encoding      string
 	DecodeMethods []string
+	InteractiveOut bool 
 
 	compiledIncludeRegexes []*regexp.Regexp
 	compiledExcludeRegex   *regexp.Regexp
@@ -426,7 +612,17 @@ var rootCmd = &cobra.Command{
 
 	RunE: func(cmd *cobra.Command, args []string) error {
 		files := args
-		processor := NewStringProcessor(&cfg, tracker, os.Stdout)
+
+		var outputWriter io.Writer = os.Stdout
+		var pager *FullPager
+		var err error
+
+		if cfg.InteractiveOut {
+			pager = NewFullPager(cfg.QuietOut)
+			outputWriter = pager
+		}
+		
+		processor := NewStringProcessor(&cfg, tracker, outputWriter)
 
 		if len(files) == 0 {
 			stat, _ := os.Stdin.Stat()
@@ -434,7 +630,7 @@ var rootCmd = &cobra.Command{
 				return cmd.Help()
 			}
 
-			if err := processor.FindStringsInStream(os.Stdin, "<stdin>", cfg.Encoding, 0); err != nil {
+			if err = processor.FindStringsInStream(os.Stdin, "<stdin>", cfg.Encoding, 0); err != nil && err != io.EOF {
 				if !cfg.QuietOut {
 					fmt.Fprintf(os.Stderr, "Error processing stdin: %v\n", err)
 				}
@@ -450,7 +646,7 @@ var rootCmd = &cobra.Command{
 				}
 
 				err = processor.FindStringsInStream(file, filename, cfg.Encoding, 0)
-				if err != nil {
+				if err != nil && err != io.EOF {
 					if !cfg.QuietOut {
 						fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", filename, err)
 					}
@@ -474,9 +670,14 @@ var rootCmd = &cobra.Command{
 			})
 
 			for _, kv := range sortedCounts {
-				fmt.Fprintf(os.Stdout, "% 7d %s\n", kv.Value, kv.Key)
+				fmt.Fprintf(outputWriter, "% 7d %s\n", kv.Value, kv.Key)
 			}
 		}
+
+		if pager != nil {
+			pager.Show()
+		}
+		
 		return nil
 	},
 }
@@ -485,7 +686,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfg.LengthRange, "length", "l", "4:", "Specify string length range MIN:MAX or MIN: or :MAX")
 	rootCmd.PersistentFlags().Float64Var(&cfg.EntropyMin, "entropy", 0, "Filter strings, only printing those with entropy >= this value")
 
-	rootCmd.PersistentFlags().StringVarP(&cfg.RegexStr, "regex", "r", "", "Filter strings, only printing those that match the regex")
+	rootCmd.PersistentFlags().StringVarP(&cfg.RegexStr, "regex", "r", "", "Filter strings, only printing those that match the regex (AND)")
 	rootCmd.PersistentFlags().StringVarP(&cfg.ExcludeStr, "exclude", "x", "", "Exclude strings that match this regex")
 
 	var choices []string
@@ -493,10 +694,10 @@ func init() {
 		choices = append(choices, k)
 	}
 	sort.Strings(choices)
-	findHelp := fmt.Sprintf("Use a predefined regex pattern. Choices: %v", choices)
+	findHelp := fmt.Sprintf("Use a predefined regex pattern. Choices: %v (AND)", choices)
 	rootCmd.PersistentFlags().StringVarP(&cfg.FindStr, "find", "f", "", findHelp)
 
-	rootCmd.PersistentFlags().StringVarP(&cfg.WordList, "wordlist", "w", "", "Search for multiple words from a wordlist file")
+	rootCmd.PersistentFlags().StringVarP(&cfg.WordList, "wordlist", "w", "", "Search for multiple words (\"Fuzzing\" style) from a wordlist file (AND)")
 
 	rootCmd.PersistentFlags().BoolVar(&cfg.JSONOut, "json", false, "Output as a stream of JSON objects (one per line)")
 	rootCmd.PersistentFlags().BoolVar(&cfg.UniqueOut, "unique", false, "Only print the first occurrence of each unique string")
@@ -508,6 +709,8 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVarP(&cfg.Encoding, "encoding", "e", "ascii", "Encoding to search for (ascii, utf-16le, utf-16be)")
 	rootCmd.PersistentFlags().StringSliceVarP(&cfg.DecodeMethods, "decode", "d", nil, "Try to decode found strings with (base64, hex)")
+	
+	rootCmd.PersistentFlags().BoolVarP(&cfg.InteractiveOut, "interactive", "i", false, "Use a full pager (scroll up/down) for output")
 }
 
 func main() {
