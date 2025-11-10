@@ -64,6 +64,25 @@ Find all strings matching a URL pattern, but exclude any that specifically conta
 stringx config.ini -f url --exclude 'http://localhost'
 ```
 
+### 5. Interactive Pager
+
+When dealing with large files, the `--interactive` flag switches the output to a full-screen, `less`-style. This allows you to scroll output vertically without relying on external tools.
+
+```shell
+stringx -i large_db_dump.bin
+```
+
+#### Pager Controls
+
+| Key | Action |
+| --- | --- |
+| **Up Arrow** / **Down Arrow** / **Enter** | Scroll line-by-line |
+| **Space** | Scroll down one page |
+| **b** | Scroll up one page (back) |
+| **g** | Go to the top of the output |
+| **G** | Go to the bottom of the output |
+| **q** | Quit the pager and exit `stringx` |
+
 ## Command Reference
 
 | Flag | Short | Description | Example
@@ -74,9 +93,11 @@ stringx config.ini -f url --exclude 'http://localhost'
 | `--entropy` | | Filter strings with entropy >= this value (e.g., 4). | `--entropy 3` |
 | `--regex` | `-r` | Filter strings, only printing those that match the regex. | `-r 'KEY_[A-Z0-9]{20}'` |
 | `--exclude` | `-x` | Exclude strings that match this regex. | `-x 'http://localhost'` |
+| `--wordlist` | `-w` | Search for multiple words (\"Fuzzing\" style) from a wordlist file | `-w seclists/Passwords/Leaked-Databases/rockyou.txt` |
+| `--interactive` | `-i` | Use a full-screen, `less`-style pager for output. | |
 | `--find` | `-f` | Use a predefined regex pattern. Choices: `ip`, `email`, `url`, `hash_md5`, `hash_sha256`. | `-f email` |
 | `--count` | | Count occurrences of each string and print a summary. | `--count` |
 | `--unique` | | Only print the first occurrence of each unique string. | `--unique` |
 | `--json` | | Output results as a stream of JSON objects (one per line). | `--json` |
 | `--quiet` | `-q` | Suppress all error messages and status output (pipeline friendly) | `-q` |
-| `--wordlist` | `-w` | Search for multiple words (\"Fuzzing\" style) from a wordlist file | `-w seclists/Passwords/Leaked-Databases/rockyou.txt` |
+
