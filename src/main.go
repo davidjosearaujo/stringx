@@ -16,9 +16,9 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
-	"golang.org/x/term" 
 )
 
 type FullPager struct {
@@ -561,7 +561,8 @@ var rootCmd = &cobra.Command{
 			for scanner.Scan() {
 				word := strings.TrimSpace(scanner.Text())
 				if word != "" {
-					escapedWords = append(escapedWords, regexp.QuoteMeta(word))
+					wholeWord := "\b" + regexp.QuoteMeta(word) + "\b"
+					escapedWords = append(escapedWords, wholeWord)
 				}
 			}
 			if err := scanner.Err(); err != nil {
