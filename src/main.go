@@ -26,7 +26,7 @@ type FullPager struct {
 	termHeight int
 	isTerminal bool
 	quiet      bool
-	cursorLine int 
+	cursorLine int
 }
 
 func NewFullPager(quiet bool) *FullPager {
@@ -55,11 +55,11 @@ func (p *FullPager) Write(data []byte) (n int, err error) {
 	for scanner.Scan() {
 		p.lines = append(p.lines, scanner.Text())
 	}
-	
+
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		return 0, err
 	}
-	
+
 	return len(data), nil
 }
 
@@ -74,7 +74,6 @@ func (p *FullPager) Show() error {
 	fmt.Fprint(os.Stdout, "\033[?1049h")
 
 	defer fmt.Fprint(os.Stdout, "\033[?1049l")
-
 
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
@@ -96,7 +95,7 @@ func (p *FullPager) Show() error {
 		if err != nil {
 			return nil
 		}
-		
+
 		r := rune(b)
 
 		if b == 27 {
@@ -119,7 +118,9 @@ func (p *FullPager) Show() error {
 		}
 
 		maxScrollLine := len(p.lines) - p.termHeight
-		if maxScrollLine < 0 { maxScrollLine = 0 }
+		if maxScrollLine < 0 {
+			maxScrollLine = 0
+		}
 
 		switch r {
 		case 'q', 'Q':
@@ -147,12 +148,13 @@ func (p *FullPager) Show() error {
 		case 'G':
 			p.cursorLine = maxScrollLine
 		}
-		
+
 		p.refreshScreen()
 	}
 }
 
 func (p *FullPager) refreshScreen() {
+
 	fmt.Fprint(os.Stdout, "\033[2J\033[H")
 
 	endLine := p.cursorLine + p.termHeight
@@ -161,12 +163,12 @@ func (p *FullPager) refreshScreen() {
 	}
 
 	for _, line := range p.lines[p.cursorLine:endLine] {
-		fmt.Fprint(os.Stdout, line+"\r\n") 
+		fmt.Fprint(os.Stdout, line+"\r\n")
 	}
 
 	linesPrinted := endLine - p.cursorLine
 	for i := linesPrinted; i < p.termHeight; i++ {
-		fmt.Fprint(os.Stdout, "~\r\n") 
+		fmt.Fprint(os.Stdout, "~\r\n")
 	}
 
 	p.showPrompt()
@@ -180,8 +182,8 @@ func (p *FullPager) showPrompt() {
 	fmt.Fprintf(os.Stdout, "\033[%d;1H", p.termHeight+1)
 
 	totalLines := len(p.lines)
-	
-	fmt.Fprint(os.Stdout, "\033[K") 
+
+	fmt.Fprint(os.Stdout, "\033[K")
 
 	if totalLines == 0 {
 		fmt.Fprint(os.Stdout, "(empty file)")
@@ -189,46 +191,48 @@ func (p *FullPager) showPrompt() {
 	}
 
 	currentLineIndex := p.cursorLine
-	
+
 	isEnd := (currentLineIndex + p.termHeight) >= totalLines
 
 	if isEnd {
 		fmt.Fprintf(os.Stdout, "--- (END) ---")
 	} else {
-		percent := int(math.Round(float64(currentLineIndex + p.termHeight) / float64(totalLines) * 100))
-		if percent > 100 { percent = 100 }
-		
+		percent := int(math.Round(float64(currentLineIndex+p.termHeight) / float64(totalLines) * 100))
+		if percent > 100 {
+			percent = 100
+		}
+
 		fmt.Fprintf(os.Stdout, "--- %d/%d (%d%%) --- (Up/Down/Enter: line, space/b: page, g/G: top/bottom, q: quit)",
-			currentLineIndex + 1, totalLines, percent)
+			currentLineIndex+1, totalLines, percent)
 	}
-	
+
 	fmt.Fprintf(os.Stdout, "\033[H")
 }
 
 var predefinedPatterns = map[string]string{
-	"ip":          `\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`,
-	"email":       `[\w\.-]+@[\w\.-]+\.[\w]+`,
-	"url":         `https?://[^\s/$.?#].[^\s]*`,
+	"ip":    `\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`,
+	"email": `[\w\.-]+@[\w\.-]+\.[\w]+`,
+	"url":         `https?://\S+`,
 	"hash_md5":    `\b[a-fA-F\d]{32}\b`,
 	"hash_sha256": `\b[a-fA-F\d]{64}\b`,
 }
 
 type Config struct {
-	LengthRange   string
-	MinLength     int
-	MaxLength     int
-	RegexStr      string
-	FindStr       string
-	EntropyMin    float64
-	JSONOut       bool
-	UniqueOut     bool
-	CountOut      bool
-	QuietOut      bool
-	WordList      string
-	ExcludeStr    string
-	Encoding      string
-	DecodeMethods []string
-	InteractiveOut bool 
+	LengthRange    string
+	MinLength      int
+	MaxLength      int
+	RegexStr       string
+	FindStr        string
+	EntropyMin     float64
+	JSONOut        bool
+	UniqueOut      bool
+	CountOut       bool
+	QuietOut       bool
+	WordList       string
+	ExcludeStr     string
+	Encoding       string
+	DecodeMethods  []string
+	InteractiveOut bool
 
 	compiledIncludeRegexes []*regexp.Regexp
 	compiledExcludeRegex   *regexp.Regexp
@@ -283,6 +287,7 @@ func getEntropy(s string) float64 {
 }
 
 func isPrintable(r rune) bool {
+
 	return (32 <= r && r <= 126) || r == 9
 }
 
@@ -322,6 +327,7 @@ func (sp *StringProcessor) processString(
 
 	if sp.cfg.UniqueOut {
 		if _, exists := sp.tracker.uniques[foundString]; exists {
+
 			if nil == sp.cfg.DecodeMethods || len(sp.cfg.DecodeMethods) == 0 {
 				return
 			}
@@ -374,20 +380,24 @@ func (sp *StringProcessor) processString(
 
 		switch method {
 		case "base64":
+
 			s := strings.Map(func(r rune) rune {
 				if strings.ContainsRune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", r) {
 					return r
 				}
 				return -1
 			}, foundString)
+
 			if len(s)%4 != 0 {
 				s += strings.Repeat("=", 4-len(s)%4)
 			}
 			decodedBytes, err = base64.StdEncoding.DecodeString(s)
 			if err != nil {
+
 				decodedBytes, err = base64.StdEncoding.DecodeString(foundString)
 			}
 		case "hex":
+
 			s := strings.Map(func(r rune) rune {
 				if strings.ContainsRune("0123456789abcdefABCDEF", r) {
 					return r
@@ -421,6 +431,8 @@ func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string
 	var endianness binary.ByteOrder
 	var decoder transform.Transformer
 
+	isAscii := encoding == "ascii"
+
 	switch encoding {
 	case "utf-16le":
 		charSize = 2
@@ -449,15 +461,18 @@ func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string
 		}
 
 		var r rune
-		if encoding == "ascii" {
+		if isAscii {
+
 			r = rune(charBuf[0])
 		} else if n == 2 {
+
 			if endianness == binary.LittleEndian {
 				r = rune(binary.LittleEndian.Uint16(charBuf))
 			} else {
 				r = rune(binary.BigEndian.Uint16(charBuf))
 			}
 		} else {
+
 			r = 0
 		}
 
@@ -469,13 +484,20 @@ func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string
 				stringStartLine = currentLine
 				stringStartCol = currentCol
 			}
-			currentString.Write(charBuf[:n])
+
+			if isAscii {
+				currentString.WriteByte(charBuf[0])
+			} else {
+				currentString.Write(charBuf[:n])
+			}
 		} else {
+
 			if currentString.Len() > 0 {
 				var decodedString string
-				if encoding == "ascii" {
+				if isAscii {
 					decodedString = currentString.String()
 				} else {
+
 					utf8Bytes, _, err := transform.Bytes(decoder, currentString.Bytes())
 					if err != nil {
 						if !sp.cfg.QuietOut {
@@ -558,10 +580,12 @@ var rootCmd = &cobra.Command{
 
 			var escapedWords []string
 			scanner := bufio.NewScanner(file)
+
 			for scanner.Scan() {
 				word := strings.TrimSpace(scanner.Text())
 				if word != "" {
-					wholeWord := "\b" + regexp.QuoteMeta(word) + "\b"
+
+					wholeWord := "\\b" + regexp.QuoteMeta(word) + "\\b"
 					escapedWords = append(escapedWords, wholeWord)
 				}
 			}
@@ -622,10 +646,11 @@ var rootCmd = &cobra.Command{
 			pager = NewFullPager(cfg.QuietOut)
 			outputWriter = pager
 		}
-		
+
 		processor := NewStringProcessor(&cfg, tracker, outputWriter)
 
 		if len(files) == 0 {
+
 			stat, _ := os.Stdin.Stat()
 			if (stat.Mode() & os.ModeCharDevice) != 0 {
 				return cmd.Help()
@@ -637,6 +662,7 @@ var rootCmd = &cobra.Command{
 				}
 			}
 		} else {
+
 			for _, filename := range files {
 				file, err := os.Open(filename)
 				if err != nil {
@@ -678,7 +704,7 @@ var rootCmd = &cobra.Command{
 		if pager != nil {
 			pager.Show()
 		}
-		
+
 		return nil
 	},
 }
@@ -710,7 +736,7 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVarP(&cfg.Encoding, "encoding", "e", "ascii", "Encoding to search for (ascii, utf-16le, utf-16be)")
 	rootCmd.PersistentFlags().StringSliceVarP(&cfg.DecodeMethods, "decode", "d", nil, "Try to decode found strings with (base64, hex)")
-	
+
 	rootCmd.PersistentFlags().BoolVarP(&cfg.InteractiveOut, "interactive", "i", false, "Use a full pager (scroll up/down) for output")
 }
 
