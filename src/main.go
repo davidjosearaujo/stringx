@@ -210,8 +210,8 @@ func (p *FullPager) showPrompt() {
 }
 
 var predefinedPatterns = map[string]string{
-	"ip":    `\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`,
-	"email": `[\w\.-]+@[\w\.-]+\.[\w]+`,
+	"ip":          `\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`,
+	"email":       `[\w\.-]+@[\w\.-]+\.[\w]+`,
 	"url":         `https?://\S+`,
 	"hash_md5":    `\b[a-fA-F\d]{32}\b`,
 	"hash_sha256": `\b[a-fA-F\d]{64}\b`,
@@ -225,8 +225,7 @@ type Config struct {
 	FindStr        string
 	EntropyMin     float64
 	JSONOut        bool
-	UniqueOut      bool
-	CountOut       bool
+	CountType      string // Replaces CountOut bool. Can be "", "total", "freq"
 	QuietOut       bool
 	WordList       string
 	ExcludeStr     string
@@ -239,17 +238,14 @@ type Config struct {
 }
 
 type StateTracker struct {
-	counts  map[string]int
-	uniques map[string]struct{}
+	counts     map[string]int
+	totalCount int // Tracks total matches for "total" mode
 }
 
 func NewStateTracker(cfg *Config) *StateTracker {
-	st := &StateTracker{}
-	if cfg.CountOut {
-		st.counts = make(map[string]int)
-	}
-	if cfg.UniqueOut {
-		st.uniques = make(map[string]struct{})
+	st := &StateTracker{
+		counts:     make(map[string]int),
+		totalCount: 0,
 	}
 	return st
 }
@@ -321,52 +317,48 @@ func (sp *StringProcessor) processString(
 		}
 	}
 
-	if sp.cfg.CountOut {
+	// 1. Handle Count Aggregation Modes
+	// If "total" or "freq" is active, we aggregate here and DO NOT print to stream.
+	if sp.cfg.CountType == "total" {
+		sp.tracker.totalCount++
+		return
+	}
+
+	if sp.cfg.CountType == "freq" {
 		sp.tracker.counts[foundString]++
+		return
 	}
 
-	if sp.cfg.UniqueOut {
-		if _, exists := sp.tracker.uniques[foundString]; exists {
-
-			if nil == sp.cfg.DecodeMethods || len(sp.cfg.DecodeMethods) == 0 {
-				return
-			}
-		} else {
-			sp.tracker.uniques[foundString] = struct{}{}
+	// 2. Print Output
+	if sp.cfg.JSONOut {
+		data := map[string]interface{}{
+			"file":    filename,
+			"string":  foundString,
+			"length":  len(foundString),
+			"entropy": math.Round(entropy*10000) / 10000,
+			"offset":  startOffset,
+			"line":    startLine,
+			"column":  startCol,
 		}
-	}
+		if currentDepth > 0 {
+			data["recursive_depth"] = currentDepth
+		}
 
-	if !sp.cfg.CountOut {
-		if sp.cfg.JSONOut {
-			data := map[string]interface{}{
-				"file":    filename,
-				"string":  foundString,
-				"length":  len(foundString),
-				"entropy": math.Round(entropy*10000) / 10000,
-				"offset":  startOffset,
-				"line":    startLine,
-				"column":  startCol,
-			}
-			if currentDepth > 0 {
-				data["recursive_depth"] = currentDepth
-			}
-
-			jsonBytes, err := json.Marshal(data)
-			if err != nil {
-				if !sp.cfg.QuietOut {
-					fmt.Fprintf(os.Stderr, "Error marshalling JSON: %v\n", err)
-				}
-				return
-			}
-			fmt.Fprintln(sp.writer, string(jsonBytes))
-
-		} else {
+		jsonBytes, err := json.Marshal(data)
+		if err != nil {
 			if !sp.cfg.QuietOut {
-				indent := strings.Repeat("  ", currentDepth)
-				fmt.Fprintf(sp.writer, "%s%s:%d:%d:%s\n", indent, filename, startLine, startCol, foundString)
-			} else {
-				fmt.Fprintf(sp.writer, "%s\n", foundString)
+				fmt.Fprintf(os.Stderr, "Error marshalling JSON: %v\n", err)
 			}
+			return
+		}
+		fmt.Fprintln(sp.writer, string(jsonBytes))
+
+	} else {
+		if !sp.cfg.QuietOut {
+			indent := strings.Repeat("  ", currentDepth)
+			fmt.Fprintf(sp.writer, "%s%s:%d:%d:%s\n", indent, filename, startLine, startCol, foundString)
+		} else {
+			fmt.Fprintf(sp.writer, "%s\n", foundString)
 		}
 	}
 
@@ -682,7 +674,8 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
-		if cfg.CountOut {
+		// Post-Processing: Handle Count and Frequency Modes
+		if cfg.CountType == "freq" {
 			type kv struct {
 				Key   string
 				Value int
@@ -699,6 +692,8 @@ var rootCmd = &cobra.Command{
 			for _, kv := range sortedCounts {
 				fmt.Fprintf(outputWriter, "% 7d %s\n", kv.Value, kv.Key)
 			}
+		} else if cfg.CountType == "total" {
+			fmt.Fprintf(outputWriter, "%d\n", tracker.totalCount)
 		}
 
 		if pager != nil {
@@ -727,12 +722,13 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfg.WordList, "wordlist", "w", "", "Search for multiple words (\"Fuzzing\" style) from a wordlist file")
 
 	rootCmd.PersistentFlags().BoolVar(&cfg.JSONOut, "json", false, "Output as a stream of JSON objects (one per line)")
-	rootCmd.PersistentFlags().BoolVar(&cfg.UniqueOut, "unique", false, "Only print the first occurrence of each unique string")
-	rootCmd.PersistentFlags().BoolVar(&cfg.CountOut, "count", false, "Count occurrences of each string and print a summary at the end")
+
+	// UPDATED: Single flag --count that accepts optional values
+	rootCmd.PersistentFlags().StringVar(&cfg.CountType, "count", "", "Display counts. Options: total, freq")
+	// This allows --count to be used without arguments (defaults to "total")
+	rootCmd.PersistentFlags().Lookup("count").NoOptDefVal = "total"
 
 	rootCmd.PersistentFlags().BoolVarP(&cfg.QuietOut, "quiet", "q", false, "Suppress all error messages and status output (pipeline friendly)")
-
-	rootCmd.MarkFlagsMutuallyExclusive("json", "unique", "count")
 
 	rootCmd.PersistentFlags().StringVarP(&cfg.Encoding, "encoding", "e", "ascii", "Encoding to search for (ascii, utf-16le, utf-16be)")
 	rootCmd.PersistentFlags().StringSliceVarP(&cfg.DecodeMethods, "decode", "d", nil, "Try to decode found strings with (base64, hex)")
