@@ -547,7 +547,7 @@ var rootCmd = &cobra.Command{
 	Use:     "stringx [flags] [FILE...]",
 	Short:   "Finds printable strings in a file, with advanced filtering and tooling",
 	Long:    `An enhanced version of the classic 'strings' utility, written in Go.`,
-	Version: "0.1.0",
+	Version: "0.1.1",
 
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 
