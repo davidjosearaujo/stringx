@@ -53,7 +53,7 @@ stringx memory.dmp -e utf-16le -f url
 Find all strings matching a 64-character SHA256 hash pattern and print a summary count of how many times each unique hash was found:
 
 ```shell
-stringx logs/*.log -f hash_sha256 --count
+stringx logs/*.log -f hash_sha256 --count freq
 ```
 
 ### 5. Excluding Localhost URLs
@@ -96,8 +96,7 @@ stringx -i large_db_dump.bin
 | `--wordlist` | `-w` | Search for multiple words (\"Fuzzing\" style) from a wordlist file | `-w seclists/Passwords/Leaked-Databases/rockyou.txt` |
 | `--interactive` | `-i` | Use a full-screen, `less`-style pager for output. | |
 | `--find` | `-f` | Use a predefined regex pattern. Choices: `ip`, `email`, `url`, `hash_md5`, `hash_sha256`. | `-f email` |
-| `--count` | | Count occurrences of each string and print a summary. | `--count` |
-| `--unique` | | Only print the first occurrence of each unique string. | `--unique` |
+| `--count` | `-c` | Display counts. Options: `total` (default), `freq`. | `--c freq`  |
 | `--json` | | Output results as a stream of JSON objects (one per line). | `--json` |
 | `--quiet` | `-q` | Suppress all error messages and status output (pipeline friendly) | `-q` |
 
