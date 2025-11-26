@@ -724,7 +724,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&cfg.JSONOut, "json", false, "Output as a stream of JSON objects (one per line)")
 
 	// UPDATED: Single flag --count that accepts optional values
-	rootCmd.PersistentFlags().StringVar(&cfg.CountType, "count", "", "Display counts. Options: total, freq")
+	rootCmd.PersistentFlags().StringVarP(&cfg.CountType, "count", "c", "", "Display counts. Options: total, freq")
 	// This allows --count to be used without arguments (defaults to "total")
 	rootCmd.PersistentFlags().Lookup("count").NoOptDefVal = "total"
 
