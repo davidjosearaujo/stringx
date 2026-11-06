@@ -50,20 +50,26 @@ func newWordSet(words []string) *wordSet {
 	return ws
 }
 
-func loadWordSet(path string) (*wordSet, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("could not open wordlist file %s: %w", path, err)
+// loadWordSet reads one or more wordlist files (one word per line) into a
+// single set.
+func loadWordSet(paths []string) (*wordSet, error) {
+	var words []string
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("could not open wordlist file %s: %w", path, err)
+		}
+		w, err := readWords(f)
+		f.Close()
+		if err != nil {
+			return nil, fmt.Errorf("error reading wordlist file %s: %w", path, err)
+		}
+		words = append(words, w...)
 	}
-	defer f.Close()
-	ws, err := readWordSet(f)
-	if err != nil {
-		return nil, fmt.Errorf("error reading wordlist file %s: %w", path, err)
-	}
-	return ws, nil
+	return newWordSet(words), nil
 }
 
-func readWordSet(r io.Reader) (*wordSet, error) {
+func readWords(r io.Reader) ([]string, error) {
 	var words []string
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
@@ -72,10 +78,7 @@ func readWordSet(r io.Reader) (*wordSet, error) {
 			words = append(words, w)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return newWordSet(words), nil
+	return words, scanner.Err()
 }
 
 func (ws *wordSet) Len() int { return len(ws.words) }
@@ -99,6 +102,29 @@ func (ws *wordSet) MatchString(s string) bool {
 		}
 	}
 	return false
+}
+
+// FindAllStringIndex returns non-overlapping whole-word matches, preferring
+// the longest word at each position.
+func (ws *wordSet) FindAllStringIndex(s string, n int) [][]int {
+	var out [][]int
+	for i := 0; i < len(s) && (n < 0 || len(out) < n); i++ {
+		if !isWordBoundary(s, i) {
+			continue
+		}
+		for k := len(ws.lengths) - 1; k >= 0; k-- {
+			j := i + ws.lengths[k]
+			if j > len(s) || !isWordBoundary(s, j) {
+				continue
+			}
+			if _, ok := ws.words[s[i:j]]; ok {
+				out = append(out, []int{i, j})
+				i = j - 1
+				break
+			}
+		}
+	}
+	return out
 }
 
 // isWordBoundary mirrors RE2's ASCII `\b` assertion at byte position i.

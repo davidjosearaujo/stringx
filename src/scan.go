@@ -16,14 +16,13 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"math"
-	"strings"
+	"slices"
+	"unicode"
+	"unicode/utf8"
 )
 
 // maxDecodeDepth bounds how many times decoded content is decoded again.
@@ -38,36 +37,70 @@ func NewStateTracker() *StateTracker {
 	return &StateTracker{counts: make(map[string]int)}
 }
 
+func (t *StateTracker) merge(o *StateTracker) {
+	t.totalCount += o.totalCount
+	for k, v := range o.counts {
+		t.counts[k] += v
+	}
+}
+
 type StringProcessor struct {
 	cfg     *Config
 	tracker *StateTracker
 	writer  io.Writer
+	buf     []byte // reused output line buffer
 }
 
 func NewStringProcessor(cfg *Config, tracker *StateTracker, writer io.Writer) *StringProcessor {
 	return &StringProcessor{cfg: cfg, tracker: tracker, writer: writer}
 }
 
-type jsonResult struct {
-	File           string  `json:"file"`
-	String         string  `json:"string"`
-	Length         int     `json:"length"`
-	Entropy        float64 `json:"entropy"`
-	Offset         int64   `json:"offset"`
-	Line           int     `json:"line"`
-	Column         int     `json:"column"`
-	RecursiveDepth int     `json:"recursive_depth,omitempty"`
+// source describes the data a string was found in.
+type source struct {
+	name     string
+	encoding string
+	depth    int         // decode depth; 0 for the input itself
+	ra       io.ReaderAt // the data, addressed by reported offsets; nil if unavailable
+}
+
+// hit is one string found in a source.
+type hit struct {
+	s          string // UTF-8 text
+	runes      int    // length in characters
+	start, end int64  // byte range in the source
+	line, col  int
+	src        *source
 }
 
 func getEntropy(s string) float64 {
 	if s == "" {
 		return 0
 	}
-	var counts [256]int
-	for i := 0; i < len(s); i++ {
-		counts[s[i]]++
+	var ascii [utf8.RuneSelf]int
+	var other map[rune]int
+	n := 0
+	for _, r := range s {
+		n++
+		if r < utf8.RuneSelf {
+			ascii[r]++
+			continue
+		}
+		if other == nil {
+			other = make(map[rune]int)
+		}
+		other[r]++
 	}
-	length := float64(len(s))
+
+	counts := ascii[:]
+	if other != nil {
+		counts = append([]int(nil), ascii[:]...)
+		// Sorted so the floating-point sum is deterministic.
+		for _, r := range slices.Sorted(maps.Keys(other)) {
+			counts = append(counts, other[r])
+		}
+	}
+
+	length := float64(n)
 	entropy := 0.0
 	for _, count := range counts {
 		if count == 0 {
@@ -104,173 +137,117 @@ func (sp *StringProcessor) matches(s string) (bool, float64) {
 	return true, entropy
 }
 
-func (sp *StringProcessor) processString(
-	foundString string,
-	startOffset int64,
-	startLine int,
-	startCol int,
-	filename string,
-	currentDepth int,
-) {
-	if ok, entropy := sp.matches(foundString); ok {
-		sp.emit(foundString, entropy, startOffset, startLine, startCol, filename, currentDepth)
+func (sp *StringProcessor) processString(h *hit) {
+	if ok, entropy := sp.matches(h.s); ok {
+		sp.emit(h, entropy)
 	}
 
 	// Decoding is independent of the output filters: a base64 blob rarely
 	// matches e.g. `--find url` itself, but the URL hidden inside it should.
-	if currentDepth < maxDecodeDepth {
-		sp.decode(foundString, startOffset, filename, currentDepth)
+	if h.src.depth < maxDecodeDepth {
+		sp.decodeString(h)
 	}
 }
 
-func (sp *StringProcessor) emit(s string, entropy float64, offset int64, line, col int, filename string, depth int) {
-	switch sp.cfg.CountType {
-	case "total":
-		sp.tracker.totalCount++
-		return
-	case "freq":
-		sp.tracker.counts[s]++
-		return
-	}
+const (
+	encASCII = iota
+	encUTF8
+	encUTF16LE
+	encUTF16BE
+)
 
-	if sp.cfg.JSONOut {
-		jsonBytes, err := json.Marshal(jsonResult{
-			File:           filename,
-			String:         s,
-			Length:         len(s),
-			Entropy:        math.Round(entropy*10000) / 10000,
-			Offset:         offset,
-			Line:           line,
-			Column:         col,
-			RecursiveDepth: depth,
-		})
-		if err != nil {
-			warnf(sp.cfg.QuietOut, "Error marshalling JSON: %v\n", err)
-			return
-		}
-		jsonBytes = append(jsonBytes, '\n')
-		sp.writer.Write(jsonBytes)
-		return
-	}
-
-	if sp.cfg.QuietOut {
-		fmt.Fprintf(sp.writer, "%s\n", s)
-		return
-	}
-	indent := strings.Repeat("  ", depth)
-	fmt.Fprintf(sp.writer, "%s%s:%d:%d:%s\n", indent, filename, line, col, s)
+var encodingKinds = map[string]int{
+	"ascii":    encASCII,
+	"utf-8":    encUTF8,
+	"utf-16le": encUTF16LE,
+	"utf-16be": encUTF16BE,
 }
 
-const base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-
-func (sp *StringProcessor) decode(s string, offset int64, filename string, depth int) {
-	for _, method := range sp.cfg.DecodeMethods {
-		var decoded []byte
-		var err error
-
-		switch method {
-		case "base64":
-			// Accepts both the standard and the URL-safe ("-_") alphabets by
-			// mapping URL-safe characters onto their standard equivalents.
-			clean := strings.Map(func(r rune) rune {
-				switch {
-				case r == '-':
-					return '+'
-				case r == '_':
-					return '/'
-				case strings.ContainsRune(base64Alphabet, r):
-					return r
-				}
-				return -1
-			}, s)
-			if len(clean)%4 != 0 {
-				clean += strings.Repeat("=", 4-len(clean)%4)
-			}
-			decoded, err = base64.StdEncoding.DecodeString(clean)
-			if err != nil {
-				decoded, err = base64.StdEncoding.DecodeString(s)
-			}
-		case "hex":
-			clean := strings.Map(func(r rune) rune {
-				if strings.ContainsRune("0123456789abcdefABCDEF", r) {
-					return r
-				}
-				return -1
-			}, s)
-			decoded, err = hex.DecodeString(clean)
-		}
-
-		if err == nil && len(decoded) > 0 {
-			name := fmt.Sprintf("%s->%s@%d", filename, method, offset)
-			// Errors from an in-memory reader are impossible.
-			_ = sp.FindStringsInStream(bytes.NewReader(decoded), name, "ascii", depth+1, 0)
-		}
-	}
-}
-
-// FindStringsInStream scans stream for runs of printable characters in the
-// given encoding. baseOffset is added to every reported offset, which lets
+// FindStringsInStream scans stream for runs of printable characters in
+// src.encoding. baseOffset is added to every reported offset, which lets
 // callers scanning a slice of a file (e.g. one section) report file offsets.
-func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string, encoding string, currentDepth int, baseOffset int64) error {
-	var charSize int
-	var bigEndian bool
-	switch encoding {
-	case "ascii":
-		charSize = 1
-	case "utf-16le":
-		charSize = 2
-	case "utf-16be":
-		charSize = 2
-		bigEndian = true
-	default:
-		return fmt.Errorf("unsupported encoding: %s", encoding)
+//
+// ascii and utf-16 only accept printable ASCII (like strings(1)); utf-8 also
+// accepts printable non-ASCII characters encoded as valid UTF-8.
+func (sp *StringProcessor) FindStringsInStream(stream io.Reader, src *source, baseOffset int64) error {
+	kind, ok := encodingKinds[src.encoding]
+	if !ok {
+		return fmt.Errorf("unsupported encoding: %s", src.encoding)
 	}
 
 	reader := bufio.NewReaderSize(stream, 64*1024)
 
-	// Every printable character is ASCII, so the current string is built as
-	// plain bytes regardless of the source encoding.
 	var current []byte
+	var runes int
 	var offset, startOffset int64
 	line, col := 1, 1
 	var startLine, startCol int
 
 	flush := func() {
-		if n := len(current); n > 0 && n >= sp.cfg.MinLength && n <= sp.cfg.MaxLength {
-			sp.processString(string(current), baseOffset+startOffset, startLine, startCol, filename, currentDepth)
+		if runes > 0 && runes >= sp.cfg.MinLength && runes <= sp.cfg.MaxLength {
+			sp.processString(&hit{
+				s:     string(current),
+				runes: runes,
+				start: baseOffset + startOffset,
+				end:   baseOffset + offset,
+				line:  startLine,
+				col:   startCol,
+				src:   src,
+			})
 		}
 		current = current[:0]
+		runes = 0
 	}
 
 	for {
 		var r rune
-		b0, err := reader.ReadByte()
-		if err == nil && charSize == 2 {
-			var b1 byte
-			b1, err = reader.ReadByte()
-			if bigEndian {
+		var size int
+		var err error
+
+		switch kind {
+		case encASCII:
+			var b byte
+			b, err = reader.ReadByte()
+			r, size = rune(b), 1
+		case encUTF8:
+			r, size, err = reader.ReadRune()
+		default:
+			var b0, b1 byte
+			b0, err = reader.ReadByte()
+			if err == nil {
+				b1, err = reader.ReadByte()
+			}
+			if kind == encUTF16BE {
 				r = rune(b0)<<8 | rune(b1)
 			} else {
 				r = rune(b1)<<8 | rune(b0)
 			}
-		} else {
-			r = rune(b0)
+			size = 2
 		}
+
 		if err != nil {
 			// A string running up to the end of the input is still a string.
 			flush()
 			if err == io.EOF {
 				return nil
 			}
-			return fmt.Errorf("error reading %s: %w", filename, err)
+			return fmt.Errorf("error reading %s: %w", src.name, err)
 		}
 
-		if isPrintable(r) {
-			if len(current) == 0 {
+		printable := isPrintable(r) ||
+			(kind == encUTF8 && size > 1 && r != utf8.RuneError && unicode.IsPrint(r))
+
+		if printable {
+			if runes == 0 {
 				startOffset, startLine, startCol = offset, line, col
 			}
-			current = append(current, byte(r))
-		} else if len(current) > 0 {
+			if r < utf8.RuneSelf {
+				current = append(current, byte(r))
+			} else {
+				current = utf8.AppendRune(current, r)
+			}
+			runes++
+		} else if runes > 0 {
 			flush()
 		}
 
@@ -280,6 +257,6 @@ func (sp *StringProcessor) FindStringsInStream(stream io.Reader, filename string
 		} else {
 			col++
 		}
-		offset += int64(charSize)
+		offset += int64(size)
 	}
 }

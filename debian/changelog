@@ -1,3 +1,25 @@
+stringx (1.3.0) UNRELEASED; urgency=medium
+
+  * New --find presets: ipv6, domain, guid, hash_sha1, aws_key,
+    github_token, slack_token, google_api_key, jwt, private_key, and
+    "secrets" combining all token/key presets. ip now rejects octets > 255.
+  * -f, -r, -x and -w are repeatable; filters of the same kind are
+    alternatives, different kinds must all match.
+  * New decoders: base32, url (%XX), gzip and zlib (whole input or any
+    decoded blob), and xor (brute-force all single-byte keys).
+  * Decode base64/base32/hex embedded in longer strings ("key=...",
+    "0x...", "powershell -enc ..."), and detect UTF-16 in decoded data.
+  * New encodings: utf-8 (non-ASCII text) and "all"; -e takes a list.
+  * -R/--recursive scans directories; -j/--jobs scans in parallel with
+    output kept in input order. "-" reads standard input.
+  * -t/--radix prints offsets like strings -t; --color highlights matches;
+    -C/--context shows a hexdump around each hit (also in --json).
+  * --section now also works on piped input.
+  * JSON results include the encoding; length counts characters.
+  * Faster text output.
+
+ -- David Araújo <stringx@davidjosearaujo.dev>  Fri, 06 Nov 2026 15:11:45 +0000
+
 stringx (1.2.0) unstable; urgency=medium
 
   * Fix strings that run to the end of the input being dropped, which also

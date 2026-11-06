@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -26,35 +27,40 @@ import (
 	"testing"
 )
 
-// scan runs stringx over input with cfg (defaults filled in) and returns the
-// output lines.
-func scan(t *testing.T, cfg Config, input []byte) []string {
+// scan runs stringx over input with cfg (defaults filled in), through the
+// same input/unit pipeline as the CLI, and returns the output lines.
+func scan(t *testing.T, cfg Config, data []byte) []string {
+	t.Helper()
+	return strings.Split(strings.TrimSuffix(scanRaw(t, cfg, data), "\n"), "\n")
+}
+
+func scanRaw(t *testing.T, cfg Config, data []byte) string {
 	t.Helper()
 	if cfg.LengthRange == "" {
 		cfg.LengthRange = "4:"
 	}
-	if cfg.Encoding == "" {
-		cfg.Encoding = "ascii"
-	}
 	if err := cfg.prepare(); err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
+	ins := []*input{{name: "in", data: data, buffered: true}}
+	return runInputs(t, &cfg, ins)
+}
+
+func runInputs(t *testing.T, cfg *Config, ins []*input) string {
+	t.Helper()
 	var out bytes.Buffer
-	tracker := NewStateTracker()
-	sp := NewStringProcessor(&cfg, tracker, &out)
-	if err := sp.FindStringsInStream(bytes.NewReader(input), "in", cfg.Encoding, 0, 0); err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	writeCounts(&out, &cfg, tracker)
-	s := strings.TrimSuffix(out.String(), "\n")
-	if s == "" {
-		return nil
-	}
-	return strings.Split(s, "\n")
+	tracker, _ := runUnits(buildUnits(ins, cfg), cfg, &out, func(in *input, err error) {
+		fmt.Fprintf(&out, "ERR %s: %v\n", in.name, err)
+	})
+	writeCounts(&out, cfg, tracker)
+	return out.String()
 }
 
 func assertLines(t *testing.T, got []string, want ...string) {
 	t.Helper()
+	if len(got) == 1 && got[0] == "" {
+		got = nil
+	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("got:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
@@ -83,27 +89,27 @@ func TestLengthRange(t *testing.T) {
 
 func TestUTF16(t *testing.T) {
 	le := []byte("h\x00e\x00l\x00l\x00o\x00\x00\x00w\x00o\x00r\x00l\x00d\x00")
-	assertLines(t, scan(t, Config{Encoding: "utf-16le"}, le), "in:1:1:hello", "in:1:7:world")
+	assertLines(t, scan(t, Config{Encodings: []string{"utf-16le"}}, le), "in:1:1:hello", "in:1:7:world")
 
 	be := []byte("\x00h\x00e\x00l\x00l\x00o\x01\x00\x00w\x00o\x00r\x00l\x00d")
-	assertLines(t, scan(t, Config{Encoding: "utf-16be"}, be), "in:1:1:hello", "in:1:7:world")
+	assertLines(t, scan(t, Config{Encodings: []string{"utf-16be"}}, be), "in:1:1:hello", "in:1:7:world")
 
 	// A non-ASCII UTF-16 code unit (é = U+00E9) terminates a string.
-	assertLines(t, scan(t, Config{Encoding: "utf-16le"}, []byte("a\x00b\x00c\x00d\x00\xe9\x00")), "in:1:1:abcd")
+	assertLines(t, scan(t, Config{Encodings: []string{"utf-16le"}}, []byte("a\x00b\x00c\x00d\x00\xe9\x00")), "in:1:1:abcd")
 
 	// A trailing odd byte must not crash or be treated as a character.
-	assertLines(t, scan(t, Config{Encoding: "utf-16le"}, []byte("a\x00b\x00c\x00d\x00e")), "in:1:1:abcd")
+	assertLines(t, scan(t, Config{Encodings: []string{"utf-16le"}}, []byte("a\x00b\x00c\x00d\x00e")), "in:1:1:abcd")
 }
 
 func TestFilters(t *testing.T) {
 	in := []byte("http://localhost/a\x00https://example.com/b\x00mail me@example.org\x00aaaaaaaa\x00")
 
-	assertLines(t, scan(t, Config{FindStr: "url"}, in), "in:1:1:http://localhost/a", "in:1:20:https://example.com/b")
-	assertLines(t, scan(t, Config{FindStr: "url", ExcludeStr: "localhost"}, in), "in:1:20:https://example.com/b")
-	assertLines(t, scan(t, Config{FindStr: "email"}, in), "in:1:42:mail me@example.org")
-	assertLines(t, scan(t, Config{RegexStr: "^a+$"}, in), "in:1:62:aaaaaaaa")
+	assertLines(t, scan(t, Config{FindStrs: []string{"url"}}, in), "in:1:1:http://localhost/a", "in:1:20:https://example.com/b")
+	assertLines(t, scan(t, Config{FindStrs: []string{"url"}, ExcludeStrs: []string{"localhost"}}, in), "in:1:20:https://example.com/b")
+	assertLines(t, scan(t, Config{FindStrs: []string{"email"}}, in), "in:1:42:mail me@example.org")
+	assertLines(t, scan(t, Config{RegexStrs: []string{"^a+$"}}, in), "in:1:62:aaaaaaaa")
 	// Include patterns are ANDed together.
-	assertLines(t, scan(t, Config{FindStr: "url", RegexStr: "example"}, in), "in:1:20:https://example.com/b")
+	assertLines(t, scan(t, Config{FindStrs: []string{"url"}, RegexStrs: []string{"example"}}, in), "in:1:20:https://example.com/b")
 	// "aaaaaaaa" has zero entropy.
 	if got := scan(t, Config{EntropyMin: 1}, in); len(got) != 3 {
 		t.Errorf("entropy filter: got %d lines, want 3: %v", len(got), got)
@@ -123,7 +129,7 @@ func TestJSONOutput(t *testing.T) {
 	if err := json.Unmarshal([]byte(got[0]), &r); err != nil {
 		t.Fatal(err)
 	}
-	want := jsonResult{File: "in", String: "abcd", Length: 4, Entropy: 2, Offset: 1, Line: 1, Column: 2}
+	want := jsonResult{File: "in", String: "abcd", Length: 4, Entropy: 2, Offset: 1, Line: 1, Column: 2, Encoding: "ascii"}
 	if r != want {
 		t.Errorf("got %+v, want %+v", r, want)
 	}
@@ -143,18 +149,18 @@ func TestRecursiveDecode(t *testing.T) {
 
 	// Two levels deep.
 	nested := []byte(b64(b64("deeply hidden")))
-	got := scan(t, Config{DecodeMethods: []string{"base64"}, QuietOut: true, RegexStr: "hidden"}, nested)
+	got := scan(t, Config{DecodeMethods: []string{"base64"}, QuietOut: true, RegexStrs: []string{"hidden"}}, nested)
 	assertLines(t, got, "deeply hidden")
 
 	hexIn := []byte("68656c6c6f20776f726c64")
-	got = scan(t, Config{DecodeMethods: []string{"hex"}, QuietOut: true, RegexStr: "^hello"}, hexIn)
+	got = scan(t, Config{DecodeMethods: []string{"hex"}, QuietOut: true, RegexStrs: []string{"^hello"}}, hexIn)
 	assertLines(t, got, "hello world")
 }
 
 func TestDecodeIgnoresOutputFilters(t *testing.T) {
 	// The base64 blob itself doesn't match --find url, but its content does.
 	in := []byte(b64("see https://evil.example/x"))
-	got := scan(t, Config{DecodeMethods: []string{"base64"}, FindStr: "url", QuietOut: true}, in)
+	got := scan(t, Config{DecodeMethods: []string{"base64"}, FindStrs: []string{"url"}, QuietOut: true}, in)
 	assertLines(t, got, "see https://evil.example/x")
 }
 
@@ -172,16 +178,16 @@ func TestCounts(t *testing.T) {
 
 func TestPrepareValidation(t *testing.T) {
 	bad := []Config{
-		{LengthRange: "abc", Encoding: "ascii"},
-		{LengthRange: "-1:", Encoding: "ascii"},
-		{LengthRange: "10:2", Encoding: "ascii"},
-		{LengthRange: "4:", Encoding: "utf-32"},
-		{LengthRange: "4:", Encoding: "ascii", CountType: "bogus"},
-		{LengthRange: "4:", Encoding: "ascii", DecodeMethods: []string{"rot13"}},
-		{LengthRange: "4:", Encoding: "ascii", FindStr: "phone"},
-		{LengthRange: "4:", Encoding: "ascii", RegexStr: "("},
-		{LengthRange: "4:", Encoding: "ascii", ExcludeStr: "["},
-		{LengthRange: "4:", Encoding: "ascii", WordList: "/nonexistent/wordlist"},
+		{LengthRange: "abc", Encodings: []string{"ascii"}},
+		{LengthRange: "-1:", Encodings: []string{"ascii"}},
+		{LengthRange: "10:2", Encodings: []string{"ascii"}},
+		{LengthRange: "4:", Encodings: []string{"utf-32"}},
+		{LengthRange: "4:", Encodings: []string{"ascii"}, CountType: "bogus"},
+		{LengthRange: "4:", Encodings: []string{"ascii"}, DecodeMethods: []string{"rot13"}},
+		{LengthRange: "4:", Encodings: []string{"ascii"}, FindStrs: []string{"phone"}},
+		{LengthRange: "4:", Encodings: []string{"ascii"}, RegexStrs: []string{"("}},
+		{LengthRange: "4:", Encodings: []string{"ascii"}, ExcludeStrs: []string{"["}},
+		{LengthRange: "4:", Encodings: []string{"ascii"}, WordLists: []string{"/nonexistent/wordlist"}},
 	}
 	for _, c := range bad {
 		if err := c.prepare(); err == nil {
@@ -250,7 +256,7 @@ func TestWordlistFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := []byte("my password1\x00the password is\x00root admin\x00nothing\x00")
-	assertLines(t, scan(t, Config{WordList: path, QuietOut: true}, in), "the password is", "root admin")
+	assertLines(t, scan(t, Config{WordLists: []string{path}, QuietOut: true}, in), "the password is", "root admin")
 }
 
 func TestPagerWrite(t *testing.T) {
@@ -288,7 +294,7 @@ func TestOpenSection(t *testing.T) {
 		t.Skip("unknown executable format")
 	}
 
-	r, base, err := openSection(f, name)
+	r, base, _, err := openSection(f, name)
 	if err != nil {
 		t.Fatalf("openSection(%s): %v", name, err)
 	}
@@ -300,10 +306,10 @@ func TestOpenSection(t *testing.T) {
 		t.Errorf("section data doesn't match file contents at reported offset %d", base)
 	}
 
-	if _, _, err := openSection(f, ".does-not-exist"); err == nil {
+	if _, _, _, err := openSection(f, ".does-not-exist"); err == nil {
 		t.Error("expected error for missing section")
 	}
-	if _, _, err := openSection(bytes.NewReader([]byte("not an executable")), ".text"); err == nil {
+	if _, _, _, err := openSection(bytes.NewReader([]byte("not an executable")), ".text"); err == nil {
 		t.Error("expected error for non-executable")
 	}
 }
@@ -318,7 +324,7 @@ func TestURLSafeBase64Decode(t *testing.T) {
 		t.Fatalf("test payload should exercise the URL-safe alphabet: %s", url)
 	}
 	for _, enc := range []string{std, url} {
-		got := scan(t, Config{DecodeMethods: []string{"base64"}, RegexStr: "hunter2", QuietOut: true}, []byte(enc))
+		got := scan(t, Config{DecodeMethods: []string{"base64"}, RegexStrs: []string{"hunter2"}, QuietOut: true}, []byte(enc))
 		assertLines(t, got, payload)
 	}
 }

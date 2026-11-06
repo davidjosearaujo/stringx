@@ -39,63 +39,63 @@ func isMachOFatMagic(magic []byte) bool {
 
 // openSection returns a reader over the named section of an ELF, PE or
 // Mach-O file, plus the section's offset within the file so reported string
-// offsets can be opened directly in a hex editor or disassembler.
-func openSection(r io.ReaderAt, name string) (io.Reader, int64, error) {
+// offsets can be opened directly in a hex editor or disassembler. inFile is
+// false when offsets don't map to the file (compressed ELF sections).
+func openSection(r io.ReaderAt, name string) (sec io.ReadSeeker, base int64, inFile bool, err error) {
 	magic := make([]byte, 4)
 	if _, err := r.ReadAt(magic, 0); err != nil && err != io.EOF {
-		return nil, 0, fmt.Errorf("error reading magic bytes: %w", err)
+		return nil, 0, false, fmt.Errorf("error reading magic bytes: %w", err)
 	}
 
 	switch {
 	case bytes.HasPrefix(magic, []byte("\x7fELF")):
 		f, err := elf.NewFile(r)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
-		sec := f.Section(name)
-		if sec == nil {
+		s := f.Section(name)
+		if s == nil {
 			break
 		}
-		if sec.Type == elf.SHT_NOBITS {
-			return bytes.NewReader(nil), int64(sec.Offset), nil
+		if s.Type == elf.SHT_NOBITS {
+			return bytes.NewReader(nil), int64(s.Offset), true, nil
 		}
-		base := int64(sec.Offset)
-		if sec.Flags&elf.SHF_COMPRESSED != 0 {
+		if s.Flags&elf.SHF_COMPRESSED != 0 {
 			// Offsets inside decompressed data don't map to the file.
-			base = 0
+			return s.Open(), 0, false, nil
 		}
-		return sec.Open(), base, nil
+		return s.Open(), int64(s.Offset), true, nil
 
 	case bytes.HasPrefix(magic, []byte("MZ")):
 		f, err := pe.NewFile(r)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
-		if sec := f.Section(name); sec != nil {
-			return sec.Open(), int64(sec.Offset), nil
+		if s := f.Section(name); s != nil {
+			return s.Open(), int64(s.Offset), true, nil
 		}
 
 	case isMachOMagic(magic):
 		f, err := macho.NewFile(r)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
-		if sec := f.Section(name); sec != nil {
-			return sec.Open(), int64(sec.Offset), nil
+		if s := f.Section(name); s != nil {
+			return s.Open(), int64(s.Offset), true, nil
 		}
 
 	case isMachOFatMagic(magic):
 		// Universal binary: use the first architecture that has the section.
 		ff, err := macho.NewFatFile(r)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
 		for _, arch := range ff.Arches {
-			if sec := arch.Section(name); sec != nil {
-				return sec.Open(), int64(arch.Offset) + int64(sec.Offset), nil
+			if s := arch.Section(name); s != nil {
+				return s.Open(), int64(arch.Offset) + int64(s.Offset), true, nil
 			}
 		}
 	}
 
-	return nil, 0, errSectionNotFound
+	return nil, 0, false, errSectionNotFound
 }
