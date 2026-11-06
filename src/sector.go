@@ -1,0 +1,101 @@
+// Copyright 2025-2026 David Araújo
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+import (
+	"bytes"
+	"debug/elf"
+	"debug/macho"
+	"debug/pe"
+	"fmt"
+	"io"
+)
+
+var errSectionNotFound = fmt.Errorf("section not found or unsupported format")
+
+func isMachOMagic(magic []byte) bool {
+	return bytes.HasPrefix(magic, []byte{0xfe, 0xed, 0xfa, 0xce}) || // 32-bit
+		bytes.HasPrefix(magic, []byte{0xce, 0xfa, 0xed, 0xfe}) || // 32-bit reverse
+		bytes.HasPrefix(magic, []byte{0xfe, 0xed, 0xfa, 0xcf}) || // 64-bit
+		bytes.HasPrefix(magic, []byte{0xcf, 0xfa, 0xed, 0xfe}) // 64-bit reverse
+}
+
+func isMachOFatMagic(magic []byte) bool {
+	return bytes.HasPrefix(magic, []byte{0xca, 0xfe, 0xba, 0xbe}) ||
+		bytes.HasPrefix(magic, []byte{0xbe, 0xba, 0xfe, 0xca})
+}
+
+// openSection returns a reader over the named section of an ELF, PE or
+// Mach-O file, plus the section's offset within the file so reported string
+// offsets can be opened directly in a hex editor or disassembler.
+func openSection(r io.ReaderAt, name string) (io.Reader, int64, error) {
+	magic := make([]byte, 4)
+	if _, err := r.ReadAt(magic, 0); err != nil && err != io.EOF {
+		return nil, 0, fmt.Errorf("error reading magic bytes: %w", err)
+	}
+
+	switch {
+	case bytes.HasPrefix(magic, []byte("\x7fELF")):
+		f, err := elf.NewFile(r)
+		if err != nil {
+			return nil, 0, err
+		}
+		sec := f.Section(name)
+		if sec == nil {
+			break
+		}
+		if sec.Type == elf.SHT_NOBITS {
+			return bytes.NewReader(nil), int64(sec.Offset), nil
+		}
+		base := int64(sec.Offset)
+		if sec.Flags&elf.SHF_COMPRESSED != 0 {
+			// Offsets inside decompressed data don't map to the file.
+			base = 0
+		}
+		return sec.Open(), base, nil
+
+	case bytes.HasPrefix(magic, []byte("MZ")):
+		f, err := pe.NewFile(r)
+		if err != nil {
+			return nil, 0, err
+		}
+		if sec := f.Section(name); sec != nil {
+			return sec.Open(), int64(sec.Offset), nil
+		}
+
+	case isMachOMagic(magic):
+		f, err := macho.NewFile(r)
+		if err != nil {
+			return nil, 0, err
+		}
+		if sec := f.Section(name); sec != nil {
+			return sec.Open(), int64(sec.Offset), nil
+		}
+
+	case isMachOFatMagic(magic):
+		// Universal binary: use the first architecture that has the section.
+		ff, err := macho.NewFatFile(r)
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, arch := range ff.Arches {
+			if sec := arch.Section(name); sec != nil {
+				return sec.Open(), int64(arch.Offset) + int64(sec.Offset), nil
+			}
+		}
+	}
+
+	return nil, 0, errSectionNotFound
+}

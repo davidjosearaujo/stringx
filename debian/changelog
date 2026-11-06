@@ -1,3 +1,27 @@
+stringx (1.2.0) unstable; urgency=medium
+
+  * Fix strings that run to the end of the input being dropped, which also
+    broke recursive decoding (-d).
+  * Decode found strings regardless of output filters, so e.g.
+    `-d base64 -f url` finds URLs inside base64 blobs.
+  * Count decoded strings in --count mode.
+  * Accept URL-safe base64 (-_ alphabet, optional padding) in -d base64.
+  * Rename --sector to --section; --sector is still accepted.
+  * Report file offsets (not section offsets) with --section, and support
+    universal (fat) Mach-O binaries.
+  * Replace the wordlist regex with a hash lookup; large wordlists such as
+    rockyou.txt are now practical.
+  * Validate --length, --encoding, --decode and --count up front.
+  * Report the real error for unreadable inputs and exit with status 1.
+  * Pager: fix terminal height detection, read keys from the terminal when
+    data is piped on stdin, handle very long lines, quit on Ctrl-C.
+  * Add --json output for --count; buffer stdout for faster output.
+  * Add a test suite.
+  * debian/copyright: declare Apache-2.0, matching upstream LICENSE and
+    source headers (was incorrectly GPL-3.0+).
+
+ -- David Araújo <stringx@davidjosearaujo.dev>  Fri, 06 Nov 2026 14:33:55 +0000
+
 stringx (0.1.0) UNRELEASED; urgency=medium
 
   * Initial release.

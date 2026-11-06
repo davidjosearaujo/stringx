@@ -7,13 +7,13 @@ Inspired by the classic UNIX `strings` tool, `stringx` goes beyond basic extract
 ## Key Features
 
 - **Flexible Length Filtering:** Use the powerful `-l, --length` flag to define minimum, maximum, or a range of string lengths (`MIN:MAX`, `MIN:`, or `:MAX`).
-- **Recursive Decoding:** Automatically decode embedded Base64 or Hex strings and search for further strings within the decoded content (`-d, --decode base64` or `--decode hex`).
+- **Recursive Decoding:** Automatically decode embedded Base64 or Hex strings and search for further strings within the decoded content (`-d, --decode base64` or `--decode hex`). Base64 decoding accepts both the standard and the URL-safe (`-_`) alphabets, with or without padding. Filters apply to the output, not to what gets decoded, so `-d base64 -f url` finds URLs hidden inside Base64 blobs.
 - **Encoding Support:** Search within multi-byte data streams, including **UTF-16 Little Endian** (`utf-16le`) and **UTF-16 Big Endian** (`utf-16be`), not just standard ASCII.
 - **Entropy Filtering:** Identify potentially sensitive or compressed data by filtering strings based on their Shannon entropy (`--entropy`).
 - **Predefined Regex:** Quickly filter for common data patterns like IP addresses, URLs, MD5/SHA256 hashes, and emails (`-f, --find ip`).
 - **Data Analysis Output:** Get summary counts of unique strings (`--count`) or output results as **JSON** for easy integration into other tools (`--json`).
-- **Wordlist search:** Provide a wordlist file to search for multiple words, *fuzzing* style.
-- **Sector targeting** Target a specific sector in a binary (supports ELF, PE and Mach-OS).
+- **Wordlist search:** Provide a wordlist file to search for multiple whole words, *fuzzing* style. Lookups are hash-based, so multi-million-entry lists such as `rockyou.txt` are fine.
+- **Section targeting:** Target a specific section of a binary (supports ELF, PE and Mach-O, including universal binaries). Reported offsets are file offsets, so they can be opened directly in a hex editor.
 
 ## Usage
 
@@ -51,10 +51,10 @@ stringx memory.dmp -e utf-16le -f url
 
 ### 4. Counting Unique API Keys
 
-Find all strings matching a 64-character SHA256 hash pattern and print a summary count of how many times each unique hash was found:
+Find all strings matching a 64-character SHA256 hash pattern and print a summary count of how many times each unique hash was found (note the `=`: `--count` has an optional value, so `--count freq` would treat `freq` as a file name):
 
 ```shell
-stringx logs/*.log -f hash_sha256 --count freq
+stringx logs/*.log -f hash_sha256 --count=freq
 ```
 
 ### 5. Excluding Localhost URLs
@@ -65,7 +65,7 @@ Find all strings matching a URL pattern, but exclude any that specifically conta
 stringx config.ini -f url --exclude 'http://localhost'
 ```
 
-### 5. Interactive Pager
+### 6. Interactive Pager
 
 When dealing with large files, the `--interactive` flag switches the output to a full-screen, `less`-style. This allows you to scroll output vertically without relying on external tools.
 
@@ -97,7 +97,21 @@ stringx -i large_db_dump.bin
 | `--wordlist` | `-w` | Search for multiple words (\"Fuzzing\" style) from a wordlist file | `-w seclists/Passwords/Leaked-Databases/rockyou.txt` |
 | `--interactive` | `-i` | Use a full-screen, `less`-style pager for output. | |
 | `--find` | `-f` | Use a predefined regex pattern. Choices: `ip`, `email`, `url`, `hash_md5`, `hash_sha256`. | `-f email` |
-| `--count` | `-c` | Display counts. Options: `total` (default), `freq`. | `-c freq`  |
+| `--count` | `-c` | Display counts. Options: `total` (default), `freq`. The value must be attached with `=` (or `-cfreq`). | `--count=freq`  |
 | `--json` | | Output results as a stream of JSON objects (one per line). | `--json` |
 | `--quiet` | `-q` | Suppress all error messages and status output (pipeline friendly) | `-q` |
-| `--sector` | `-s` | Target a specific sector of an executable | `-s .rodata` |
+| `--section` | `-s` | Only scan this section of an executable (ELF, PE, Mach-O). `--sector` is accepted as an alias. | `-s .rodata` |
+
+## Exit Status
+
+`stringx` exits with `0` on success and `1` if any input could not be read or an option is invalid. Strings from the inputs that *could* be read are still printed.
+
+## Building and Testing
+
+```shell
+go test ./...      # run the test suite
+go build ./src     # build for the current platform
+./build.sh         # cross-compile release binaries into build/
+```
+
+The version lives in `src/main.go` and must match the top entry of `debian/changelog` (a test enforces this). `build.sh` stamps the version from a git tag such as `v1.2.0` when one exists, or from `VERSION=... ./build.sh`.
