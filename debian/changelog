@@ -1,4 +1,4 @@
-stringx (1.3.0) UNRELEASED; urgency=medium
+stringx (1.3.0) unstable; urgency=medium
 
   * New --find presets: ipv6, domain, guid, hash_sha1, aws_key,
     github_token, slack_token, google_api_key, jwt, private_key, and
@@ -17,8 +17,10 @@ stringx (1.3.0) UNRELEASED; urgency=medium
   * --section now also works on piped input.
   * JSON results include the encoding; length counts characters.
   * Faster text output.
+  * build.sh: checksums.txt lists bare file names, so it verifies next to
+    downloaded release assets.
 
- -- David Araújo <stringx@davidjosearaujo.dev>  Fri, 06 Nov 2026 15:11:45 +0000
+ -- David Araújo <stringx@davidjosearaujo.dev>  Fri, 06 Nov 2026 15:20:47 +0000
 
 stringx (1.2.0) unstable; urgency=medium
 
