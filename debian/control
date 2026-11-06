@@ -1,0 +1,17 @@
+Source: stringx
+Section: utils
+Priority: optional
+Maintainer: David Araújo <stringx@davidjosearaujo.dev>
+Rules-Requires-Root: no
+Build-Depends:
+ debhelper-compat (= 13), dh-exec
+Standards-Version: 4.7.2
+Homepage: https://codeberg.org/davidjosearaujo/stringx
+
+Package: stringx
+Architecture: any
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+Description: Highly-filterable printable character sequences extraction.
+ Entropy and regex filtering, multi-byte encodings and recursive decoding.

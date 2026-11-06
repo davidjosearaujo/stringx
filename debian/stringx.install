@@ -1,0 +1,2 @@
+#!/usr/bin/dh-exec
+build/stringx-linux-amd64 => usr/bin/stringx
