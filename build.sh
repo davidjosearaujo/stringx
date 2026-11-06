@@ -19,5 +19,6 @@ for i in "${!GOOS_[@]}"; do
     [ "${GOOS_[i]}" = "windows" ] && EXT=".exe"
     TARGET_FILE="${BUILD_DIR}/stringx-${GOOS_[i]}-${GOARCH_[i]}${EXT}"
     GOOS=${GOOS_[i]} GOARCH=${GOARCH_[i]} go build -trimpath -mod=readonly -ldflags="$LDFLAGS" -o "$TARGET_FILE" ./src
-    sha256sum "$TARGET_FILE" >> "${BUILD_DIR}/checksums.txt"
+    # Bare file names, so `sha256sum -c checksums.txt` works next to the downloads.
+    (cd "${BUILD_DIR}" && sha256sum "$(basename "$TARGET_FILE")" >> checksums.txt)
 done
