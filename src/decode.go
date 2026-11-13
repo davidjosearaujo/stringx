@@ -311,29 +311,52 @@ func isZlib(b []byte) bool {
 		(uint16(b[0])<<8|uint16(b[1]))%31 == 0
 }
 
-// xorReader XORs everything read through it with a single-byte key.
+// xorReader XORs everything read through it with a repeating key. off is the
+// position in the underlying data of the next byte to read (see xorBytes).
 type xorReader struct {
 	r   io.Reader
-	key byte
+	key []byte
+	off int64
 }
 
-func (x xorReader) Read(p []byte) (int, error) {
+func (x *xorReader) Read(p []byte) (int, error) {
 	n, err := x.r.Read(p)
-	for i := range p[:n] {
-		p[i] ^= x.key
-	}
+	xorBytes(p[:n], x.key, x.off)
+	x.off += int64(n)
 	return n, err
 }
 
 type xorReaderAt struct {
 	r   io.ReaderAt
-	key byte
+	key []byte
 }
 
 func (x xorReaderAt) ReadAt(p []byte, off int64) (int, error) {
 	n, err := x.r.ReadAt(p, off)
-	for i := range p[:n] {
-		p[i] ^= x.key
-	}
+	xorBytes(p[:n], x.key, off)
 	return n, err
+}
+
+// xorBytes XORs p in place with key, which repeats over the data from
+// position 0. p holds the bytes at position off, so phasing the key on off is
+// what keeps a streamed scan and a random-access reread of the same data in
+// step.
+func xorBytes(p, key []byte, off int64) {
+	if len(key) == 0 {
+		return
+	}
+	if len(key) == 1 {
+		k := key[0]
+		for i := range p {
+			p[i] ^= k
+		}
+		return
+	}
+	k := int(off % int64(len(key)))
+	for i := range p {
+		p[i] ^= key[k]
+		if k++; k == len(key) {
+			k = 0
+		}
+	}
 }

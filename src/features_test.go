@@ -260,6 +260,112 @@ func TestXORBruteForce(t *testing.T) {
 	assertLines(t, got, "in->xor(0x5a):3e9:connect to http://c2.example/beacon")
 }
 
+// xorWith returns data XORed with key repeating from offset 0, the way a
+// packer would obfuscate a whole file.
+func xorWith(data, key []byte) []byte {
+	out := make([]byte, len(data))
+	for i := range data {
+		out[i] = data[i] ^ key[i%len(key)]
+	}
+	return out
+}
+
+func TestXORWithGivenKey(t *testing.T) {
+	// The text starts at offset 11, so a multi-byte key is mid-cycle there.
+	plain := []byte(strings.Repeat("\x00", 11) + "connect to http://c2.example/beacon")
+
+	// Key spellings are TestParseXorKey's job; these two cover the pipeline
+	// for a single-byte and a multi-byte key.
+	for _, c := range []struct {
+		spec, label string
+		key         []byte
+	}{
+		{"xor:5a", "in->xor(0x5a)", []byte{0x5a}},
+		{"xor:deadbeef", "in->xor(0xdeadbeef)", []byte{0xde, 0xad, 0xbe, 0xef}},
+	} {
+		cfg := Config{DecodeMethods: []string{c.spec}, FindStrs: []string{"url"}, Radix: "x"}
+		got := scan(t, cfg, xorWith(plain, c.key))
+		assertLines(t, got, c.label+":b:connect to http://c2.example/beacon")
+	}
+}
+
+// A given key must also reach --context, which re-reads the input at the
+// reported offsets: the hexdump has to show plaintext, in the right phase.
+func TestXORWithGivenKeyContext(t *testing.T) {
+	key := []byte{0xde, 0xad, 0xbe, 0xef}
+	plain := []byte("\x00\x00\x00\x00\x00hello world\x00\x00\x00")
+
+	cfg := Config{RegexStrs: []string{"hello"}, Context: 2}
+	want := strings.Replace(scanRaw(t, cfg, plain), "in:", "in->xor(0xdeadbeef):", 1)
+
+	cfg.DecodeMethods = []string{"xor:deadbeef"}
+	got := scanRaw(t, cfg, xorWith(plain, key))
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// Keys are additive: the plain input and every given key are all scanned.
+func TestXORKeysAreExtraPasses(t *testing.T) {
+	// 0xff separates the two halves in both the plain and the 0x5a view.
+	in := append([]byte("plain text here\xff"), xorWith([]byte("keyed text here"), []byte{0x5a})...)
+	cfg := Config{DecodeMethods: []string{"xor:5a", "xor:5a", "xor:11"}, RegexStrs: []string{"text here"}}
+	assertLines(t, scan(t, cfg, in),
+		"in:1:1:plain text here",
+		"in->xor(0x5a):1:17:keyed text here",
+	)
+}
+
+func TestXorKeyExpansion(t *testing.T) {
+	for _, c := range []struct {
+		specs []string
+		want  int
+	}{
+		// The same key twice is one pass.
+		{[]string{"xor:5a", "xor:5a", "xor:11"}, 2},
+		// A bare "xor" means all 255 single-byte keys, which subsume an
+		// explicit single-byte key but not a multi-byte one.
+		{[]string{"xor"}, 255},
+		{[]string{"xor", "xor:5a"}, 255},
+		{[]string{"xor", "xor:5a", "xor:deadbeef"}, 256},
+		{nil, 0},
+	} {
+		cfg := prepared(t, Config{DecodeMethods: c.specs, RegexStrs: []string{"x"}})
+		if got := len(cfg.xorKeys); got != c.want {
+			t.Errorf("-d %v: got %d keys, want %d", c.specs, got, c.want)
+		}
+	}
+}
+
+func TestParseXorKey(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want []byte
+	}{
+		{"5a", []byte{0x5a}},
+		{"0x5a", []byte{0x5a}},
+		{"5", []byte{0x05}},
+		{"0x5", []byte{0x05}},
+		{"DEADBEEF", []byte{0xde, 0xad, 0xbe, 0xef}},
+		{"s:5a", []byte("5a")},
+		{"s:a", []byte("a")},
+		{"secret", []byte("secret")},
+		{"abc", []byte("abc")},
+	} {
+		got, err := parseXorKey(c.in)
+		if err != nil {
+			t.Errorf("parseXorKey(%q): %v", c.in, err)
+		} else if !bytes.Equal(got, c.want) {
+			t.Errorf("parseXorKey(%q) = %x, want %x", c.in, got, c.want)
+		}
+	}
+	for _, in := range []string{"", "s:", "0x", "0xabc", "0xzz"} {
+		if got, err := parseXorKey(in); err == nil {
+			t.Errorf("parseXorKey(%q) = %x, want an error", in, got)
+		}
+	}
+}
+
 // --- Output ---------------------------------------------------------------
 
 func TestRadix(t *testing.T) {

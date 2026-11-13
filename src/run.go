@@ -99,11 +99,12 @@ func readerInput(name string, r io.Reader, cfg *Config) *input {
 	return &input{name: name, data: data, buffered: true}
 }
 
-// unit is one pass over an input: one encoding, one XOR key.
+// unit is one pass over an input: one encoding, one XOR key (nil for the
+// plain pass).
 type unit struct {
 	in       *input
 	encoding string
-	xorKey   byte
+	xorKey   []byte
 	inflate  bool // also look for gzip/zlib data (once per input)
 
 	w       orderedWriter
@@ -114,22 +115,20 @@ type unit struct {
 
 func buildUnits(ins []*input, cfg *Config) []*unit {
 	var units []*unit
+	// A nil key is the plain pass over the input itself.
+	keys := append([][]byte{nil}, cfg.xorKeys...)
 	for _, in := range ins {
 		if in.err != nil {
 			units = append(units, &unit{in: in})
 			continue
 		}
-		keys := 1
-		if cfg.xor {
-			keys = 256
-		}
 		for ei, enc := range cfg.Encodings {
-			for k := 0; k < keys; k++ {
+			for _, key := range keys {
 				units = append(units, &unit{
 					in:       in,
 					encoding: enc,
-					xorKey:   byte(k),
-					inflate:  ei == 0 && k == 0 && (cfg.gunzip || cfg.zlib),
+					xorKey:   key,
+					inflate:  ei == 0 && key == nil && (cfg.gunzip || cfg.zlib),
 				})
 			}
 		}
@@ -178,9 +177,10 @@ func (u *unit) run(cfg *Config) error {
 	}
 
 	name := in.name
-	if u.xorKey != 0 {
-		name = fmt.Sprintf("%s->xor(0x%02x)", in.name, u.xorKey)
-		r = xorReader{r, u.xorKey}
+	if len(u.xorKey) > 0 {
+		name = fmt.Sprintf("%s->xor(0x%x)", in.name, u.xorKey)
+		// base is where r starts in the input (non-zero with --section).
+		r = &xorReader{r: r, key: u.xorKey, off: base}
 		if ra != nil {
 			ra = xorReaderAt{ra, u.xorKey}
 		}

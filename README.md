@@ -2,13 +2,13 @@
 
 stringx is an enhanced, modern, and highly-filterable command-line utility for extracting printable character sequences from files.
 
-Inspired by the classic UNIX `strings` tool, `stringx` goes beyond basic extraction, offering features essential for security analysts, reverse engineers, and data forensics professionals: secret and IOC detection, entropy and regex filtering, multi-byte encodings, recursive decoding of embedded and compressed data, and XOR brute-forcing.
+Inspired by the classic UNIX `strings` tool, `stringx` goes beyond basic extraction, offering features essential for security analysts, reverse engineers, and data forensics professionals: secret and IOC detection, entropy and regex filtering, multi-byte encodings, recursive decoding of embedded and compressed data, and XOR deobfuscation with a known or brute-forced key.
 
 ## Key Features
 
 - **Secret & IOC hunting:** Built-in patterns for AWS keys, GitHub and Slack tokens, Google API keys, JWTs, private keys, IPv4/IPv6 addresses, domains, URLs, emails, GUIDs and hashes (`-f secrets`, `-f ipv6`, ...).
 - **Recursive Decoding:** Decode Base64 (standard or URL-safe), Base32, hex and URL-encoded strings, inflate gzip/zlib data, and search the result again, up to 10 layers deep (`-d base64,gzip`). Encoded data embedded in a longer string (`token=...`, `powershell -enc ...`) is found too, and decoded UTF-16 is detected automatically.
-- **XOR brute-force:** Try all 255 single-byte XOR keys over the input to reveal lightly obfuscated strings (`-d xor`).
+- **XOR deobfuscation:** Rescan the input with a known key, single or multi-byte (`-d xor:5a`, `-d xor:deadbeef`, `-d xor:s:mykey`), or try all 255 single-byte keys when you don't have one (`-d xor`).
 - **Encoding Support:** ASCII, UTF-8 (including non-ASCII text), UTF-16LE and UTF-16BE, or all of the classic three at once (`-e all`).
 - **Flexible Filtering:** Repeatable regexes, predefined patterns and wordlists, exclusions, Shannon entropy and length ranges.
 - **Wordlist search:** Search for whole words from one or more wordlists. Lookups are hash-based, so multi-million-entry lists such as `rockyou.txt` are fine.
@@ -54,9 +54,18 @@ stringx -d base64,gzip -f ip,ipv6 config.bin
 
 `-d gzip` also works on a whole `.gz` file: `stringx -d gzip logs.gz`.
 
-### 4. Brute-forcing XOR-obfuscated strings
+### 4. Reading XOR-obfuscated strings
 
-Try every single-byte XOR key and keep only real hits:
+With a known key, pass it and read the strings straight off:
+
+```shell
+stringx -d xor:5a malware.bin
+stringx -d xor:deadbeef -f url -C 16 malware.bin
+```
+
+The key is hex (`5a`, `0x5a`, `deadbeef`) or, with an `s:` prefix, text (`s:mykey`); a value that isn't valid hex is taken as text too, so `-d xor:hunter2` works. Multi-byte keys repeat over the input. Keys are repeatable (`-d xor:5a,xor:deadbeef`), and the plain, un-XORed input is always scanned as well.
+
+Without a key, every single-byte key is tried; keep only real hits with a filter:
 
 ```shell
 stringx -d xor -f url -t x malware.bin
@@ -153,6 +162,7 @@ stringx -i large_db_dump.bin
 | `gzip` | Inflates gzip data, either the whole input or any decoded blob |
 | `zlib` | Inflates zlib data, either the whole input or any decoded blob |
 | `xor` | Rescans the whole input with each single-byte XOR key (1–255) |
+| `xor:KEY` | Rescans the whole input with that key only: hex (`xor:5a`, `xor:deadbeef`) or text (`xor:s:mykey`), repeating over the input |
 
 Decoded content is searched again, up to 10 layers deep, in the selected encodings, plus UTF-16 when the data looks like it. Filters only decide what is printed, never what gets decoded. Each inflated stream is capped at 128 MiB.
 
@@ -169,7 +179,7 @@ Decoded content is searched again, up to 10 layers deep, in the selected encodin
 | `--wordlist` | `-w` | Only print strings containing a whole word from this file. Repeatable. | `-w rockyou.txt` |
 | `--exclude` | `-x` | Drop strings matching this regex. Repeatable. | `-x localhost` |
 | `--entropy` | | Only print strings with Shannon entropy >= this value. | `--entropy 4` |
-| `--decode` | `-d` | Decoders (see above). Repeatable or comma-separated. | `-d base64,gzip` |
+| `--decode` | `-d` | Decoders (see above). Repeatable or comma-separated. `xor` takes an optional key. | `-d base64,gzip`, `-d xor:5a` |
 | `--radix` | `-t` | Print offsets instead of line:column, in `x` (hex), `d` (decimal) or `o` (octal). | `-t x` |
 | `--context` | `-C` | Show a hexdump of N bytes around each string. | `-C 16` |
 | `--color` | | Highlight matches: `auto` (default; when writing to a terminal and `NO_COLOR` is unset), `always`, `never`. | `--color=never` |
