@@ -30,7 +30,7 @@ import (
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
-var version = "1.3.0"
+var version = "1.4.0"
 
 // errReported signals a failure whose details were already printed.
 var errReported = errors.New("one or more inputs could not be processed")
@@ -52,6 +52,9 @@ FILE may be "-" for standard input, or a directory with -R.
 
 Filters of the same kind are alternatives (-f url -f email: either), while
 different kinds must all match (-f url -r example: a URL containing "example").
+
+-d xor tries all 255 single-byte XOR keys; -d xor:KEY uses just that one, as
+hex (xor:5a, xor:deadbeef) or as text (xor:s:mykey).
 
 Note: --count and --color take an optional value, so pass it with '='
 (--count=freq, --color=never). '--count freq' would treat 'freq' as a file.`,
@@ -170,7 +173,7 @@ func init() {
 	flags.Float64Var(&cfg.EntropyMin, "entropy", 0, "Only print strings with Shannon entropy >= this value")
 
 	// Decoding
-	flags.StringSliceVarP(&cfg.DecodeMethods, "decode", "d", nil, "Decode recursively with: base64, base32, hex, url, gzip, zlib, xor (comma-separated)")
+	flags.StringSliceVarP(&cfg.DecodeMethods, "decode", "d", nil, "Decode recursively with: base64, base32, hex, url, gzip, zlib, xor[:KEY] (comma-separated)")
 
 	// Output
 	flags.StringVarP(&cfg.Radix, "radix", "t", "", "Print offsets instead of line:column, in x (hex), d (decimal) or o (octal)")

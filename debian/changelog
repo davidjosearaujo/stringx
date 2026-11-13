@@ -1,3 +1,19 @@
+stringx (1.4.0) unstable; urgency=medium
+
+  * -d xor takes a key, so a known key can be read straight off instead of
+    brute-forced: -d xor:5a, -d xor:0x5a, -d xor:deadbeef (multi-byte keys
+    repeat over the input), or -d xor:s:mykey for a text key. A value that
+    isn't valid hex is taken as text.
+  * Keys are repeatable (-d xor:5a,xor:deadbeef) and additive: the plain,
+    un-XORed input is always scanned as well. A bare -d xor still tries all
+    255 single-byte keys. Results are labelled with the key, e.g.
+    file->xor(0xdeadbeef).
+  * XOR keys apply to -C/--context and --section too: the hexdump shows the
+    deciphered bytes, in the right key phase.
+  * Reject a key given to a decoder that takes none, e.g. -d hex:5a.
+
+ -- David Araújo <stringx@davidjosearaujo.dev>  Fri, 13 Nov 2026 17:02:11 +0000
+
 stringx (1.3.0) unstable; urgency=medium
 
   * New --find presets: ipv6, domain, guid, hash_sha1, aws_key,
